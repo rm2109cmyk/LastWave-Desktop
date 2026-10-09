@@ -1,0 +1,93 @@
+name: Build LastWave Desktop - macOS
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-macos:
+    name: Build macOS Bundle
+    runs-on: xcode-27
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter 3.47.4
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.4
+          architecture: arm64
+          cache: true
+          pub-cache: true
+
+      - name: Verify toolchain
+        run: |
+          flutter --version
+          dart --version
+          xcodebuild -version
+
+      - name: Enable macOS desktop
+        run: |
+          flutter config --enable-macos-desktop
+
+      - name: Create build-time environment
+        shell: bash
+        run: |
+          # The upstream project injects ADDON_CLIENT_SECRET from its
+          # private GitHub Actions secret. Our fork does not have that
+          # secret, so leave it empty for UI/build testing.
+          printf 'ADDON_CLIENT_SECRET=\n' > .env
+
+      - name: Generate obfuscated secrets
+        run: |
+          dart tool/obfuscate_secrets.dart
+
+      - name: Install dependencies
+        run: |
+          flutter pub get
+
+      - name: Build macOS app
+        run: |
+          flutter build macos --release
+
+      - name: Verify application bundle
+        shell: bash
+        run: |
+          APP_PATH="build/macos/Build/Products/Release/lastwave_desktop.app"
+
+          if [ ! -d "$APP_PATH" ]; then
+            echo "::error::Expected macOS app bundle was not produced."
+            echo "Contents of build output:"
+            find build/macos/Build/Products/Release -maxdepth 2 -print
+            exit 1
+          fi
+
+          echo "Found: $APP_PATH"
+          du -sh "$APP_PATH"
+
+      - name: Package macOS application
+        shell: bash
+        run: |
+          APP_PATH="build/macos/Build/Products/Release/lastwave_desktop.app"
+
+          ditto \
+            -c \
+            -k \
+            --sequesterRsrc \
+            --keepParent \
+            "$APP_PATH" \
+            "LastWave-Desktop-macos-arm64.zip"
+
+          ls -lh "LastWave-Desktop-macos-arm64.zip"
+
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LastWave-Desktop-macOS-arm64
+          path: LastWave-Desktop-macos-arm64.zip
+          if-no-files-found: error
+          retention-days: 30

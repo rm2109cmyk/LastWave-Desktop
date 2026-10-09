@@ -1,4 +1,5 @@
-import 'package:fluent_ui/fluent_ui.dart';
+import "package:fluent_ui/fluent_ui.dart";
+import "platform.dart";
 
 /// CANONICAL — all agents must import this, do NOT use LwColors/LwRadius.
 ///
@@ -114,10 +115,10 @@ class WaveRadius {
 /// Compact density — real desktop music player zones.
 class WaveDensity {
   WaveDensity._();
-  static const double railCollapsed = 60;
-  static const double railExpanded = 200;
-  static const double titleBar = 44;
-  static const double dock = 80;
+  static double get railCollapsed => isMacOS ? macOSSidebarCollapsedWidth : 60;
+  static double get railExpanded => isMacOS ? macOSSidebarWidth : 200;
+  static double get titleBar => isMacOS ? macOSToolbarHeight : 44;
+  static double get dock => isMacOS ? macOSDockHeight : 80;
   static const double trackRow = 54;
   static const double trackArt = 40;
   static const double contextPanel = 360;

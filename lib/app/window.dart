@@ -1,10 +1,13 @@
 import 'dart:io';
 
+import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_acrylic/flutter_acrylic.dart';
 import 'package:hotkey_manager/hotkey_manager.dart';
 import 'package:tray_manager/tray_manager.dart';
 import 'package:window_manager/window_manager.dart';
+
+import '../ui/theme/platform.dart';
 
 /// Desktop platform integration: native Mica/acrylic materials,
 /// custom window chrome, tray, global hotkeys.
@@ -21,15 +24,16 @@ Future<void> setupWindow() async {
     // ordered quit. Without this, Alt+F4 tears the engine down while
     // libmpv's thread is still calling into Dart (startup crash).
     await windowManager.setPreventClose(true);
-    const options = WindowOptions(
-      size: Size(1360, 860),
-      minimumSize: Size(1024, 640),
+    final options = WindowOptions(
+      size: const Size(1360, 860),
+      minimumSize: const Size(1024, 640),
       center: true,
       title: 'LastWave',
       titleBarStyle: TitleBarStyle.hidden,
       // Neutral graphite — matches WaveColors.background so first frame
-      // never flashes navy in either theme.
-      backgroundColor: Color(0xFF0E0E0E),
+      // never flashes navy in either theme. Make it transparent on macOS
+      // so native vibrancy can show through.
+      backgroundColor: isMacOS ? Colors.transparent : const Color(0xFF0E0E0E),
     );
     await windowManager.waitUntilReadyToShow(options, () async {
       await windowManager.show();
@@ -43,6 +47,11 @@ Future<void> setupWindow() async {
 Future<void> _setupAcrylic() async {
   try {
     await Window.initialize();
+    if (isMacOS) {
+      // On macOS, rely on NSVisualEffectView in MainFlutterWindow.swift
+      await Window.setEffect(effect: WindowEffect.transparent);
+      return;
+    }
     // Mica incorporates wallpaper + theme: the native observatory
     // base. Tinted dark; light pearl theme switches at runtime.
     await Window.setEffect(
@@ -56,6 +65,7 @@ Future<void> _setupAcrylic() async {
 
 /// Switch the native material when the pearl/midnight theme changes.
 Future<void> applyWindowMaterial({required bool isLight}) async {
+  if (isMacOS) return;
   try {
     await Window.setEffect(
       effect: WindowEffect.mica,

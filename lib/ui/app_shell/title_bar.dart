@@ -1,4 +1,5 @@
-import 'package:fluent_ui/fluent_ui.dart';
+import "package:fluent_ui/fluent_ui.dart";
+import "../theme/platform.dart";
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -45,6 +46,8 @@ class WaveTitleBar extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    if (isMacOS) return _buildMacToolbar(context, ref);
+
     final dark = waveIsDark(context);
     final auth = ref.watch(authRepositoryProvider);
     return WaveHaze(
@@ -125,9 +128,6 @@ class WaveTitleBar extends ConsumerWidget {
                 // Profile / account — tiny, no giant buttons.
                 GestureDetector(
                   onTap: () {
-                    // Your avatar always means your profile: drop any
-                    // stale friend view, otherwise /profile would show
-                    // whoever you last checked out.
                     ref.read(viewingProfileProvider.notifier).clear();
                     context.go(
                       auth.status == AuthStatus.signedIn
@@ -174,7 +174,290 @@ class WaveTitleBar extends ConsumerWidget {
       ),
     );
   }
+
+  Widget _buildMacToolbar(BuildContext context, WidgetRef ref) {
+    final dark = waveIsDark(context);
+    final auth = ref.watch(authRepositoryProvider);
+
+    // Calm window-frame element. Transparent base, relying on app_shell's background or Mica/vibrancy.
+    // The sidebar handles the traffic lights space on the left.
+    return SizedBox(
+      height: macOSToolbarHeight, // Slightly taller Mac toolbar
+      child: Stack(
+        children: [
+          // Drag area for the entire toolbar
+          Positioned.fill(
+            child: DragToMoveArea(
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onDoubleTap: () async {
+                  try {
+                    if (await windowManager.isMaximized()) {
+                      await windowManager.unmaximize();
+                    } else {
+                      await windowManager.maximize();
+                    }
+                  } catch (_) {}
+                },
+                child: const SizedBox.expand(),
+              ),
+            ),
+          ),
+
+          // Actual content overlaying the drag area
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final maxW = constraints.maxWidth;
+              final compact = maxW < 500;
+              final searchMax = (maxW * 0.35).clamp(160.0, 320.0).toDouble();
+
+              return Row(
+                children: [
+                  const SizedBox(width: 16),
+
+                  // Sidebar Toggle
+                  _MacToolbarBtn(
+                    tooltip: 'Toggle sidebar',
+                    icon: WaveIcons.panelLeft,
+                    onTap: onToggleRail,
+                  ),
+                  const SizedBox(width: 8),
+
+                  // Leading: Navigation
+                  _MacToolbarBtn(
+                    tooltip: 'Back',
+                    icon: WaveIcons.back,
+                    onTap: canGoBack ? onBack : null,
+                  ),
+                  const SizedBox(width: 4),
+                  _MacToolbarBtn(
+                    tooltip: 'Forward',
+                    icon: WaveIcons.forward,
+                    onTap: canGoForward ? onForward : null,
+                  ),
+
+                  if (!compact) ...[
+                    const SizedBox(width: 16),
+                    _MacToolbarBtn(
+                      tooltip: 'Commands (⌘K)',
+                      icon: WaveIcons.command,
+                      onTap: onPalette,
+                    ),
+                  ],
+
+                  const Spacer(),
+
+                  // Center: Search
+                  SizedBox(
+                    width: searchMax,
+                    child: _MacSearchBox(
+                      controller: searchController,
+                      focus: searchFocus,
+                      onSubmit: onSearchSubmit,
+                      onPalette: onPalette,
+                    ),
+                  ),
+
+                  const Spacer(),
+
+                  // Trailing: Community & Profile
+                  const _CommunityBtns(),
+                  const SizedBox(width: 8),
+
+                  // Minimal Mac profile button
+                  GestureDetector(
+                    onTap: () {
+                      ref.read(viewingProfileProvider.notifier).clear();
+                      context.go(
+                        auth.status == AuthStatus.signedIn ? '/profile' : '/welcome',
+                      );
+                    },
+                    child: LWTooltip(
+                      message: auth.status == AuthStatus.signedIn ? auth.username : 'Connect Last.fm',
+                      child: Container(
+                        width: 28,
+                        height: 28,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: dark ? Colors.white.withValues(alpha: 0.1) : Colors.black.withValues(alpha: 0.05),
+                          border: Border.all(color: dark ? Colors.white.withValues(alpha: 0.05) : Colors.black.withValues(alpha: 0.05)),
+                        ),
+                        child: Center(
+                          child: Text(
+                            auth.status == AuthStatus.signedIn && auth.username.isNotEmpty
+                                ? auth.username[0].toUpperCase()
+                                : '?',
+                            style: WaveType.label.copyWith(fontSize: 11, fontWeight: FontWeight.w500),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  _AppMenu(),
+                  const SizedBox(width: 16),
+                ],
+              );
+            }
+          ),
+        ],
+      ),
+    );
+  }
 }
+
+class _MacToolbarBtn extends StatefulWidget {
+  final String tooltip;
+  final IconData icon;
+  final VoidCallback? onTap;
+
+  const _MacToolbarBtn({required this.tooltip, required this.icon, this.onTap});
+
+  @override
+  State<_MacToolbarBtn> createState() => _MacToolbarBtnState();
+}
+
+class _MacToolbarBtnState extends State<_MacToolbarBtn> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final disabled = widget.onTap == null;
+    final color = waveIsDark(context) ? Colors.white : Colors.black;
+    return LWTooltip(
+      message: widget.tooltip,
+      child: MouseRegion(
+        onEnter: (_) => setState(() => _hover = true),
+        onExit: (_) => setState(() => _hover = false),
+        cursor: disabled ? SystemMouseCursors.basic : SystemMouseCursors.click,
+        child: GestureDetector(
+          onTap: widget.onTap,
+          behavior: HitTestBehavior.opaque,
+          child: Container(
+            width: 32,
+            height: 32,
+            decoration: BoxDecoration(
+              color: (_hover && !disabled)
+                ? color.withValues(alpha: 0.08)
+                : Colors.transparent,
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: Icon(
+              widget.icon,
+              size: 14,
+              color: disabled ? waveTextTertiary(context) : color.withValues(alpha: 0.8),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _MacSearchBox extends ConsumerStatefulWidget {
+  final TextEditingController controller;
+  final FocusNode focus;
+  final ValueChanged<String> onSubmit;
+  final VoidCallback onPalette;
+
+  const _MacSearchBox({
+    required this.controller,
+    required this.focus,
+    required this.onSubmit,
+    required this.onPalette,
+  });
+
+  @override
+  ConsumerState<_MacSearchBox> createState() => _MacSearchBoxState();
+}
+
+class _MacSearchBoxState extends ConsumerState<_MacSearchBox> {
+  bool _hover = false;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.focus.addListener(_onFocus);
+  }
+
+  @override
+  void dispose() {
+    widget.focus.removeListener(_onFocus);
+    super.dispose();
+  }
+
+  void _onFocus() {
+    setState(() {});
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final dark = waveIsDark(context);
+    final focused = widget.focus.hasFocus;
+
+    // Subdued, pill-shaped Mac search field
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      cursor: SystemMouseCursors.text,
+      child: GestureDetector(
+        onTap: () => widget.focus.requestFocus(),
+        behavior: HitTestBehavior.opaque,
+        child: Container(
+          height: 28,
+          padding: const EdgeInsets.symmetric(horizontal: 10),
+          decoration: BoxDecoration(
+            color: dark
+              ? Colors.black.withValues(alpha: (focused || _hover) ? 0.3 : 0.2)
+              : Colors.black.withValues(alpha: (focused || _hover) ? 0.08 : 0.05),
+            borderRadius: BorderRadius.circular(14), // Pill shape
+            border: Border.all(
+              color: focused
+                ? waveAccent(context).withValues(alpha: 0.5)
+                : (dark ? Colors.white.withValues(alpha: 0.1) : Colors.transparent),
+              width: 1,
+            ),
+          ),
+          child: Row(
+            children: [
+              Icon(
+                WaveIcons.search,
+                size: 13,
+                color: focused ? waveAccent(context) : waveTextTertiary(context),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: EditableText(
+                  controller: widget.controller,
+                  focusNode: widget.focus,
+                  style: WaveType.body.copyWith(
+                    color: waveTextPrimary(context),
+                    fontSize: 13,
+                  ),
+                  cursorColor: waveAccent(context),
+                  backgroundCursorColor: Colors.transparent,
+                  selectionColor: waveAccent(context).withValues(alpha: 0.3),
+                  onSubmitted: widget.onSubmit,
+                ),
+              ),
+              if (widget.controller.text.isNotEmpty)
+                GestureDetector(
+                  onTap: () {
+                    widget.controller.clear();
+                    widget.onSubmit('');
+                  },
+                  child: Icon(WaveIcons.close, size: 12, color: waveTextTertiary(context)),
+                )
+              else if (!focused)
+                Text('⌘K', style: WaveType.label.copyWith(color: waveTextTertiary(context), fontSize: 11)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 
 class _WaveSearchBox extends ConsumerStatefulWidget {
   final TextEditingController controller;
@@ -352,7 +635,7 @@ class _WaveSearchBoxState extends ConsumerState<_WaveSearchBox> {
                           ),
                         ),
                         child: Text(
-                          'Ctrl K',
+                          shortcutBadge('K'),
                           style: TextStyle(
                             fontSize: 9.5,
                             fontWeight: FontWeight.w500,

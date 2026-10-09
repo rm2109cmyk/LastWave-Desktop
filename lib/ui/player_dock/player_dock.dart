@@ -17,6 +17,7 @@ import '../components/artwork.dart';
 import '../components/buttons.dart' show LWTooltip, LWVolumeSlider;
 import '../components/menus.dart';
 import '../theme/haze.dart';
+import '../theme/platform.dart';
 import '../theme/tokens.dart';
 import '../theme/wave_icons.dart';
 
@@ -70,6 +71,11 @@ class WavePlayerDock extends ConsumerWidget {
     final dockTint = ref.watch(artworkSeedProvider(artworkUrl)).valueOrNull;
 
     final targetBase = () {
+      if (isMacOS) {
+        return dark
+            ? Colors.black.withValues(alpha: 0.25)
+            : Colors.white.withValues(alpha: 0.5);
+      }
       final baseColor = dark
           ? WaveColors.dockTranslucent
           : WaveColors.lightSurface.withValues(alpha: 0.97);
@@ -84,6 +90,15 @@ class WavePlayerDock extends ConsumerWidget {
       duration: WaveMotion.normal,
       curve: Curves.easeOutCubic,
       builder: (context, animatedBase, child) {
+        if (isMacOS) {
+          return Container(
+            decoration: BoxDecoration(
+              color: animatedBase ?? targetBase,
+              border: Border(top: BorderSide(color: waveDivider(context))),
+            ),
+            child: child!,
+          );
+        }
         return WaveHaze(
           level: LwHazeLevel.l1,
           base: animatedBase ?? targetBase,
@@ -94,9 +109,9 @@ class WavePlayerDock extends ConsumerWidget {
         );
       },
       child: SizedBox(
-        height: WaveDensity.dock,
+        height: isMacOS ? macOSDockHeight : WaveDensity.dock,
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12),
+          padding: EdgeInsets.symmetric(horizontal: isMacOS ? 20 : 12),
           child: LayoutBuilder(
             builder: (context, constraints) {
               // Dock width is content width (already rail-aware) — never

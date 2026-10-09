@@ -17,10 +17,10 @@ LwBreakpoint lwBreakpointFor(double width) {
 /// Density — desktop music player zones.
 class LwDensity {
   LwDensity._();
-  static const double railCollapsed = WaveDensity.railCollapsed; // 60
-  static const double railExpanded = WaveDensity.railExpanded; // 200
-  static const double titleBar = WaveDensity.titleBar; // 44
-  static const double dock = WaveDensity.dock; // 80
+  static double get railCollapsed => WaveDensity.railCollapsed; // 60
+  static double get railExpanded => WaveDensity.railExpanded; // 200
+  static double get titleBar => WaveDensity.titleBar; // 44
+  static double get dock => WaveDensity.dock; // 80
   static const double trackRow = WaveDensity.trackRow; // 54
   static const double trackArt = WaveDensity.trackArt; // 40
   static const double contextPanel = WaveDensity.contextPanel; // 360

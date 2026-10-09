@@ -2,7 +2,9 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
-import 'package:fluent_ui/fluent_ui.dart';
+import "package:fluent_ui/fluent_ui.dart";
+import "package:flutter/cupertino.dart" show CupertinoSwitch, CupertinoSlider;
+import "../theme/platform.dart";
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -266,6 +268,52 @@ class _Group extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = FluentTheme.of(context);
     final stroke = theme.resources.cardStrokeColorDefault;
+
+    if (isMacOS) {
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 24),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(4, 0, 4, 8),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title, style: WaveType.sectionTitle.copyWith(fontWeight: FontWeight.w600)),
+                  const SizedBox(height: 2),
+                  Text(
+                    subtitle,
+                    style: WaveType.meta.copyWith(
+                      color: waveTextSecondary(context),
+                      fontSize: 12.0,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: waveIsDark(context) ? const Color(0xFF1E1E1E) : Colors.white,
+                border: Border.all(color: waveDivider(context).withValues(alpha: 0.5)),
+                borderRadius: BorderRadius.circular(8),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.03),
+                    blurRadius: 4,
+                    offset: const Offset(0, 1),
+                  ),
+                ],
+              ),
+              child: child,
+            ),
+          ],
+        ),
+      );
+    }
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -2315,13 +2363,20 @@ class _SwitchRow extends StatelessWidget {
                     subtitle!,
                     style: WaveType.meta.copyWith(
                       color: waveTextSecondary(context),
+                      fontSize: isMacOS ? 12 : null,
                     ),
                   ),
               ],
             ),
           ),
           const SizedBox(width: 10),
-          ToggleSwitch(checked: value, onChanged: onChanged),
+          isMacOS
+              ? CupertinoSwitch(
+                  value: value,
+                  onChanged: onChanged,
+                  activeColor: waveAccent(context),
+                )
+              : ToggleSwitch(checked: value, onChanged: onChanged),
         ],
       ),
     );

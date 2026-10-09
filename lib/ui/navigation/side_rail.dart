@@ -1,4 +1,5 @@
-import 'package:fluent_ui/fluent_ui.dart';
+import "package:fluent_ui/fluent_ui.dart";
+import "../theme/platform.dart";
 import 'package:flutter/services.dart';
 
 import '../components/buttons.dart' show LWTooltip;
@@ -65,82 +66,103 @@ class _WaveSideRailState extends State<WaveSideRail> {
   @override
   Widget build(BuildContext context) {
     final dark = waveIsDark(context);
-    final width =
-        expanded ? WaveDensity.railExpanded : WaveDensity.railCollapsed;
-    // Haze Level 1 — subtle tonal navigation material, never a solid slab.
-    return WaveHaze(
-      level: LwHazeLevel.l1,
-      base: dark
-          ? WaveColors.railTranslucent
-          : WaveColors.lightNavBackground.withValues(alpha: 0.92),
-      border: Border(
-        right: BorderSide(color: waveDivider(context)),
-      ),
-      child: AnimatedContainer(
-        duration: WaveMotion.normal,
-        curve: WaveMotion.standard,
-        width: width,
+    final width = expanded
+        ? (isMacOS ? macOSSidebarWidth : WaveDensity.railExpanded)
+        : (isMacOS ? 0.0 : WaveDensity.railCollapsed);
+
+    // For macOS, we want an absolutely transparent sidebar if possible (letting window vibrancy show).
+    final bgColor = isMacOS
+        ? Colors.transparent
+        : (dark
+            ? WaveColors.railTranslucent
+            : WaveColors.lightNavBackground.withValues(alpha: 0.92));
+
+    final child = AnimatedContainer(
+      duration: WaveMotion.normal,
+      curve: WaveMotion.standard,
+      clipBehavior: Clip.hardEdge,
+      width: width,
       // The rail persists across navigation, so this group's timeline
       // runs exactly once — a startup cascade for the destinations.
       child: WaveEntranceGroup(
         child: Column(
-        children: [
-          const SizedBox(height: 6),
-          Expanded(
-            child: ListView(
-              padding: const EdgeInsets.symmetric(horizontal: 6),
-              children: [
-                // One-shot startup cascade — standalone entrances run once
-                // on mount; in-place rebuilds (selection/hover) never replay.
-                for (var i = 0; i < waveListenDestinations.length; i++)
-                  _row(waveListenDestinations[i], i),
-                WaveEntrance(
-                  index: waveListenDestinations.length,
-                  rise: 4,
-                  child: _RailSeparator(expanded: expanded),
-                ),
-                for (var i = 0; i < waveCollectionDestinations.length; i++)
-                  _row(
-                    waveCollectionDestinations[i],
-                    waveListenDestinations.length + i,
+          children: [
+            SizedBox(height: isMacOS ? macOSToolbarHeight : 6),
+            Expanded(
+              child: ListView(
+                padding: EdgeInsets.symmetric(horizontal: isMacOS ? 12 : 6),
+                children: [
+                  // One-shot startup cascade — standalone entrances run once
+                  // on mount; in-place rebuilds (selection/hover) never replay.
+                  for (var i = 0; i < waveListenDestinations.length; i++)
+                    _row(waveListenDestinations[i], i),
+                  WaveEntrance(
+                    index: waveListenDestinations.length,
+                    rise: 4,
+                    child: _RailSeparator(expanded: expanded),
                   ),
-                WaveEntrance(
-                  index: waveListenDestinations.length +
-                      waveCollectionDestinations.length,
-                  rise: 4,
-                  child: _RailSeparator(expanded: expanded),
-                ),
-                for (var i = 0; i < waveOfflineDestinations.length; i++)
-                  _row(
-                    waveOfflineDestinations[i],
-                    waveListenDestinations.length +
-                        waveCollectionDestinations.length +
-                        i,
+                  for (var i = 0; i < waveCollectionDestinations.length; i++)
+                    _row(
+                      waveCollectionDestinations[i],
+                      waveListenDestinations.length + i,
+                    ),
+                  WaveEntrance(
+                    index: waveListenDestinations.length +
+                        waveCollectionDestinations.length,
+                    rise: 4,
+                    child: _RailSeparator(expanded: expanded),
                   ),
-              ],
-            ),
-          ),
-          Container(
-            height: 1,
-            margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-            color: waveDivider(context),
-          ),
-          for (var i = 0; i < waveSystemDestinations.length; i++)
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 6),
-              child: _row(
-                waveSystemDestinations[i],
-                waveListenDestinations.length +
-                    waveCollectionDestinations.length +
-                    waveOfflineDestinations.length +
-                    i,
+                  for (var i = 0; i < waveOfflineDestinations.length; i++)
+                    _row(
+                      waveOfflineDestinations[i],
+                      waveListenDestinations.length +
+                          waveCollectionDestinations.length +
+                          i,
+                    ),
+                ],
               ),
             ),
-          const SizedBox(height: 8),
-        ],
+            Container(
+              height: 1,
+              margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              color: waveDivider(context),
+            ),
+            for (var i = 0; i < waveSystemDestinations.length; i++)
+              Padding(
+                padding: EdgeInsets.symmetric(horizontal: isMacOS ? 12 : 6),
+                child: _row(
+                  waveSystemDestinations[i],
+                  waveListenDestinations.length +
+                      waveCollectionDestinations.length +
+                      waveOfflineDestinations.length +
+                      i,
+                ),
+              ),
+            const SizedBox(height: 8),
+          ],
+        ),
       ),
+    );
+
+    if (isMacOS) {
+      return Container(
+        width: width,
+        decoration: BoxDecoration(
+          color: bgColor,
+          border: Border(right: BorderSide(color: waveDivider(context))),
+        ),
+        child: child,
+      );
+    }
+
+    // Haze Level 1 — subtle tonal navigation material, never a solid slab.
+    return WaveHaze(
+      level: LwHazeLevel.l1,
+      base: bgColor,
+      border: Border(
+        right: BorderSide(color: waveDivider(context)),
       ),
-      ),
+      child: child,
     );
   }
 }
@@ -197,7 +219,9 @@ class _RailItemState extends State<_RailItem> {
     final dark = waveIsDark(context);
     final accent = waveAccent(context);
     final bg = widget.selected
-        ? (dark ? Colors.white : Colors.black).withValues(alpha: 0.08)
+        ? (isMacOS
+            ? (dark ? Colors.white : Colors.black).withValues(alpha: 0.12)
+            : (dark ? Colors.white : Colors.black).withValues(alpha: 0.08))
         : _hover
             ? (dark ? Colors.white : Colors.black).withValues(alpha: 0.04)
             : Colors.transparent;
@@ -205,7 +229,7 @@ class _RailItemState extends State<_RailItem> {
         ? (dark ? WaveColors.textPrimary : WaveColors.lightTextPrimary)
         : (dark ? WaveColors.textSecondary : WaveColors.lightTextSecondary);
     final hasFocus = _focus.hasFocus;
-    final itemHeight = widget.expanded ? 36.0 : 46.0;
+    final itemHeight = widget.expanded ? (isMacOS ? 32.0 : 36.0) : 46.0;
 
     final content = Focus(
       focusNode: _focus,
@@ -232,11 +256,11 @@ class _RailItemState extends State<_RailItem> {
           child: AnimatedContainer(
             duration: WaveMotion.fast,
             height: itemHeight,
-            margin: const EdgeInsets.symmetric(vertical: 1.5),
+            margin: EdgeInsets.symmetric(vertical: isMacOS ? 2.0 : 1.5, horizontal: isMacOS ? 8.0 : 0.0),
             padding: EdgeInsets.zero,
             decoration: BoxDecoration(
               color: bg,
-              borderRadius: BorderRadius.circular(4),
+              borderRadius: BorderRadius.circular(isMacOS ? 6 : 4),
               border: hasFocus
                   ? Border.all(
                       color: accent.withValues(alpha: 0.6), width: 1)
@@ -245,28 +269,29 @@ class _RailItemState extends State<_RailItem> {
             child: Stack(
               alignment: Alignment.centerLeft,
               children: [
-                AnimatedPositioned(
-                  duration: WaveMotion.fast,
-                  curve: Curves.easeOutCubic,
-                  left: widget.selected ? 0 : -4,
-                  top: (itemHeight - 16) / 2,
-                  height: 16,
-                  child: AnimatedOpacity(
+                if (!isMacOS)
+                  AnimatedPositioned(
                     duration: WaveMotion.fast,
-                    opacity: widget.selected ? 1.0 : 0.0,
-                    child: Container(
-                      width: 3,
-                      decoration: BoxDecoration(
-                        color: accent,
-                        borderRadius: BorderRadius.circular(1.5),
+                    curve: Curves.easeOutCubic,
+                    left: widget.selected ? 0 : -4,
+                    top: (itemHeight - 16) / 2,
+                    height: 16,
+                    child: AnimatedOpacity(
+                      duration: WaveMotion.fast,
+                      opacity: widget.selected ? 1.0 : 0.0,
+                      child: Container(
+                        width: 3,
+                        decoration: BoxDecoration(
+                          color: accent,
+                          borderRadius: BorderRadius.circular(1.5),
+                        ),
                       ),
                     ),
                   ),
-                ),
                 Positioned.fill(
                   child: Padding(
                     padding: EdgeInsets.symmetric(
-                      horizontal: widget.expanded ? 14 : 0,
+                      horizontal: widget.expanded ? (isMacOS ? 8 : 14) : 0,
                     ),
                     child: Center(
                       child: LayoutBuilder(
@@ -276,8 +301,7 @@ class _RailItemState extends State<_RailItem> {
                           // animates 60<->200px over WaveMotion.normal
                           // while the flag flips immediately, which
                           // overflowed the Row mid-flight.
-                          final isWide =
-                              constraints.maxWidth > 100;
+                          final isWide = isMacOS ? true : (constraints.maxWidth > 100);
                           return isWide
                               ? Row(
                               children: [
@@ -289,20 +313,20 @@ class _RailItemState extends State<_RailItem> {
                                   curve: Curves.easeOutCubic,
                                   child: Icon(
                                     widget.destination.icon,
-                                    size: 16,
-                                    color: widget.selected ? accent : fg,
+                                    size: isMacOS ? 14 : 16,
+                                    color: isMacOS ? (widget.selected ? accent : fg.withValues(alpha: 0.8)) : (widget.selected ? accent : fg),
                                   ),
                                 ),
-                                const SizedBox(width: 12),
+                                const SizedBox(width: 10),
                                 Expanded(
                                   child: Text(
                                     widget.destination.label,
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
                                     style: WaveType.label.copyWith(
-                                      fontSize: 13,
+                                      fontSize: isMacOS ? 12.5 : 13,
                                       fontWeight: widget.selected
-                                          ? FontWeight.w600
+                                          ? (isMacOS ? FontWeight.w500 : FontWeight.w600)
                                           : FontWeight.w400,
                                       color: fg,
                                     ),

@@ -2,7 +2,8 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:desktop_drop/desktop_drop.dart';
-import 'package:fluent_ui/fluent_ui.dart';
+import "package:fluent_ui/fluent_ui.dart";
+import "../theme/platform.dart";
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -73,9 +74,10 @@ class _DrawerTicker extends ConsumerWidget {
 }
 
 class _WaveShellState extends ConsumerState<WaveShell> {
-  // Boot collapsed: the overlay rail covers content when open, so it
-  // starts shut (toggle via hamburger, auto-collapses on outside tap).
-  bool _railExpanded = false;
+  // Boot collapsed on Windows/Linux (overlay rail covers content when
+  // open). On macOS the sidebar is structural (not an overlay), so it
+  // starts expanded.
+  bool _railExpanded = isMacOS;
   bool _queueOpen = false;
   bool _lyricsOpen = false;
   bool _miniOpen = false;
@@ -545,6 +547,19 @@ class _WaveShellState extends ConsumerState<WaveShell> {
     // live in the HardwareKeyboard handler (see initState/_onGlobalKey +
     // wave_hotkeys.dart), which runs before focus dispatch and works from
     // anywhere. Enter is deliberately left to focused controls.
+    if (isMacOS) {
+      return _buildMacShell(
+        context: context,
+        dark: dark,
+        collapsed: collapsed,
+        active: active,
+        hasTrack: hasTrack,
+        isLyrics: isLyrics,
+        isNowPlaying: isNowPlaying,
+        width: width,
+      );
+    }
+
     return Mica(
           backgroundColor:
               dark ? WaveColors.background : WaveColors.lightBackground,
@@ -594,8 +609,14 @@ class _WaveShellState extends ConsumerState<WaveShell> {
                                     children: [
                                       // Page reserves the collapsed rail
                                       // strip; the rail floats above it.
-                                      Positioned.fill(
-                                        left: WaveDensity.railCollapsed,
+                                      // On macOS, it pushes the content completely.
+                                      AnimatedPositioned(
+                                        duration: WaveMotion.normal,
+                                        curve: WaveMotion.standard,
+                                        left: isMacOS ? (!collapsed ? WaveDensity.railExpanded : WaveDensity.railCollapsed) : WaveDensity.railCollapsed,
+                                        top: 0,
+                                        bottom: 0,
+                                        right: 0,
                                         child: widget.child,
                                       ),
                                       // Light-dismiss: tapping outside the
@@ -603,7 +624,8 @@ class _WaveShellState extends ConsumerState<WaveShell> {
                                       // absorbed, content doesn't activate).
                                       // Below the rail + panels, so those
                                       // keep working while it is open.
-                                      if (!collapsed)
+                                      // On macOS, the sidebar pushes content and is persistent, so no light dismiss.
+                                      if (!collapsed && !isMacOS)
                                         Positioned.fill(
                                           child: ExcludeSemantics(
                                             child: GestureDetector(
@@ -647,8 +669,10 @@ class _WaveShellState extends ConsumerState<WaveShell> {
                                       // the lyrics panel can frost the artwork.
                                       // Starts past the rail (which is never
                                       // dimmed) — the rail floats above.
-                                      Positioned(
-                                        left: WaveDensity.railCollapsed,
+                                      AnimatedPositioned(
+                                        duration: WaveMotion.normal,
+                                        curve: WaveMotion.standard,
+                                        left: isMacOS ? (!collapsed ? WaveDensity.railExpanded : WaveDensity.railCollapsed) : WaveDensity.railCollapsed,
                                         top: 0,
                                         bottom: 0,
                                         right: showOverlay
@@ -768,5 +792,157 @@ class _WaveShellState extends ConsumerState<WaveShell> {
             ],
           ),
         );
+  }
+
+  Widget _buildMacShell({
+    required BuildContext context,
+    required bool dark,
+    required bool collapsed,
+    required String active,
+    required bool hasTrack,
+    required bool isLyrics,
+    required bool isNowPlaying,
+    required double width,
+  }) {
+    final showOverlay = _queueOpen || (_lyricsOpen && hasTrack);
+    final lyricsOnly = _lyricsOpen && hasTrack && !_queueOpen;
+    final qw = (width * 0.9).clamp(280.0, 360.0).toDouble();
+    final lw = (width * 0.46).clamp(460.0, 720.0).toDouble();
+
+    return Container(
+      color: Colors.transparent, // Let NSVisualEffectView show through
+      child: Column(
+        children: [
+          Expanded(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                // 1. Sidebar (Full height)
+                WaveSideRail(
+                  expanded: !collapsed,
+                  active: active,
+                  onGo: _go,
+                ),
+                // 2. Main Area (Toolbar + Content)
+                Expanded(
+                  child: ColoredBox(
+                    color: dark ? WaveColors.background : WaveColors.lightBackground,
+                    child: ClipRect(
+                      child: Column(
+                        children: [
+                          _titleBarFor(_backStack.isNotEmpty, _forwardStack.isNotEmpty),
+                        const WaveInfoBarHost(),
+                        // Content + Context Panels
+                        Expanded(
+                          child: DropTarget(
+                            onDragEntered: (_) => setState(() => _draggingFiles = true),
+                            onDragExited: (_) => setState(() => _draggingFiles = false),
+                            onDragDone: (details) {
+                              setState(() => _draggingFiles = false);
+                              _dropFiles(details.files.map((f) => f.path).toList());
+                            },
+                            child: Stack(
+                              children: [
+                                widget.child,
+                                // Dimmer for context panels
+                                IgnorePointer(
+                                  ignoring: !showOverlay,
+                                  child: AnimatedOpacity(
+                                    duration: WaveMotion.normal,
+                                    curve: Curves.easeOutCubic,
+                                    opacity: showOverlay ? 1.0 : 0.0,
+                                    child: GestureDetector(
+                                      onTap: () => setState(() {
+                                        _queueOpen = false;
+                                        _lyricsOpen = false;
+                                      }),
+                                      child: Container(
+                                        color: Colors.black.withValues(
+                                          alpha: lyricsOnly ? 0.10 : 0.45,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                                // Queue
+                                AnimatedPositioned(
+                                  duration: WaveMotion.normal,
+                                  curve: Curves.easeOutCubic,
+                                  top: 0,
+                                  bottom: 0,
+                                  right: _queueOpen ? 0 : -(qw + 12),
+                                  width: qw,
+                                  child: ExcludeFocus(
+                                    excluding: !_queueOpen,
+                                    child: IgnorePointer(
+                                      ignoring: !_queueOpen,
+                                      child: Offstage(
+                                        offstage: !_queueOpen,
+                                        child: _queuePanelCache ??= WaveQueuePanel(onClose: _closeQueue),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                                // Lyrics
+                                AnimatedPositioned(
+                                  duration: WaveMotion.normal,
+                                  curve: Curves.easeOutCubic,
+                                  top: 0,
+                                  bottom: 0,
+                                  right: (_lyricsOpen && hasTrack) ? 0 : -(lw + 12),
+                                  width: lw,
+                                  child: ExcludeFocus(
+                                    excluding: !(_lyricsOpen && hasTrack),
+                                    child: IgnorePointer(
+                                      ignoring: !(_lyricsOpen && hasTrack),
+                                      child: _DrawerTicker(
+                                        open: _lyricsOpen && hasTrack,
+                                        child: _lyricsPanelFor(_lyricsOpen && hasTrack),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                                // Drag overlay
+                                if (_draggingFiles)
+                                  Container(
+                                    color: Colors.black.withValues(alpha: 0.4),
+                                    child: const Center(
+                                      child: Text('Drop audio files to play', style: WaveType.sectionTitle),
+                                    ),
+                                  ),
+                                // Mini player
+                                if (_miniOpen && hasTrack)
+                                  Positioned(
+                                    right: 16,
+                                    bottom: 16,
+                                    child: WaveMiniPlayer(
+                                      onClose: () => setState(() => _miniOpen = false),
+                                      onExpand: () {
+                                        setState(() => _miniOpen = false);
+                                        _go('/now');
+                                      },
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          // 3. Player Dock
+          _dockFor(
+            lyricsActive: _lyricsOpen || isLyrics,
+            queueActive: _queueOpen,
+            isLyrics: isLyrics,
+          ),
+        ],
+      ),
+    );
   }
 }

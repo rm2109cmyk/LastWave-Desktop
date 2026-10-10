@@ -50,16 +50,20 @@ class _WaveSideRailState extends State<WaveSideRail> {
     final selected = active == destination.path;
     return _rowCache.putIfAbsent(
       '${destination.path}|$expanded|$selected',
-      () => WaveEntrance(
-        index: index,
-        rise: rise,
-        child: _RailItem(
+      () {
+        final item = _RailItem(
           destination: destination,
           expanded: expanded,
           selected: selected,
           onTap: () => onGo(destination.path),
-        ),
-      ),
+        );
+        if (isMacOS) return item;
+        return WaveEntrance(
+          index: index,
+          rise: rise,
+          child: item,
+        );
+      },
     );
   }
 
@@ -82,6 +86,12 @@ class _WaveSideRailState extends State<WaveSideRail> {
       curve: WaveMotion.standard,
       clipBehavior: Clip.hardEdge,
       width: width,
+      decoration: isMacOS
+          ? BoxDecoration(
+              color: bgColor,
+              border: Border(right: BorderSide(color: waveDivider(context))),
+            )
+          : null,
       // The rail persists across navigation, so this group's timeline
       // runs exactly once — a startup cascade for the destinations.
       child: WaveEntranceGroup(
@@ -96,22 +106,28 @@ class _WaveSideRailState extends State<WaveSideRail> {
                   // on mount; in-place rebuilds (selection/hover) never replay.
                   for (var i = 0; i < waveListenDestinations.length; i++)
                     _row(waveListenDestinations[i], i),
-                  WaveEntrance(
-                    index: waveListenDestinations.length,
-                    rise: 4,
-                    child: _RailSeparator(expanded: expanded),
-                  ),
+                  if (isMacOS)
+                    _RailSeparator(expanded: expanded)
+                  else
+                    WaveEntrance(
+                      index: waveListenDestinations.length,
+                      rise: 4,
+                      child: _RailSeparator(expanded: expanded),
+                    ),
                   for (var i = 0; i < waveCollectionDestinations.length; i++)
                     _row(
                       waveCollectionDestinations[i],
                       waveListenDestinations.length + i,
                     ),
-                  WaveEntrance(
-                    index: waveListenDestinations.length +
-                        waveCollectionDestinations.length,
-                    rise: 4,
-                    child: _RailSeparator(expanded: expanded),
-                  ),
+                  if (isMacOS)
+                    _RailSeparator(expanded: expanded)
+                  else
+                    WaveEntrance(
+                      index: waveListenDestinations.length +
+                          waveCollectionDestinations.length,
+                      rise: 4,
+                      child: _RailSeparator(expanded: expanded),
+                    ),
                   for (var i = 0; i < waveOfflineDestinations.length; i++)
                     _row(
                       waveOfflineDestinations[i],
@@ -145,14 +161,7 @@ class _WaveSideRailState extends State<WaveSideRail> {
     );
 
     if (isMacOS) {
-      return Container(
-        width: width,
-        decoration: BoxDecoration(
-          color: bgColor,
-          border: Border(right: BorderSide(color: waveDivider(context))),
-        ),
-        child: child,
-      );
+      return child;
     }
 
     // Haze Level 1 — subtle tonal navigation material, never a solid slab.
@@ -296,12 +305,10 @@ class _RailItemState extends State<_RailItem> {
                     child: Center(
                       child: LayoutBuilder(
                         builder: (context, constraints) {
-                          // Follow the animating rail width, not the
-                          // instant `expanded` flag: the rail container
-                          // animates 60<->200px over WaveMotion.normal
-                          // while the flag flips immediately, which
-                          // overflowed the Row mid-flight.
-                          final isWide = isMacOS ? true : (constraints.maxWidth > 100);
+                          if (constraints.maxWidth <= 0) {
+                            return const SizedBox.shrink();
+                          }
+                          final isWide = constraints.maxWidth > 100;
                           return isWide
                               ? Row(
                               children: [

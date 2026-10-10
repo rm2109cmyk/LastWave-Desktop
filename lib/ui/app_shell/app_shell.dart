@@ -105,6 +105,7 @@ class _WaveShellState extends ConsumerState<WaveShell> {
   Widget? _titleBarCache;
   bool _titleCanBack = false;
   bool _titleCanForward = false;
+  bool _titleSidebarCollapsed = false;
   // Memoized dock (glyphs + cover art): same instance across
   // navigations so the element skips it. The toggle closures capture
   // route state (lyrics toggle branches on isLyrics), so the cache
@@ -162,12 +163,18 @@ class _WaveShellState extends ConsumerState<WaveShell> {
   /// Cached title bar: same instance across navigations so the element
   /// skips it (no search-box reconstruction). Rebuilt only when the
   /// back/forward ability flips.
-  Widget _titleBarFor(bool canGoBack, bool canGoForward) {
+  Widget _titleBarFor(
+    bool canGoBack,
+    bool canGoForward, {
+    bool sidebarCollapsed = false,
+  }) {
     if (_titleBarCache == null ||
         _titleCanBack != canGoBack ||
-        _titleCanForward != canGoForward) {
+        _titleCanForward != canGoForward ||
+        _titleSidebarCollapsed != sidebarCollapsed) {
       _titleCanBack = canGoBack;
       _titleCanForward = canGoForward;
+      _titleSidebarCollapsed = sidebarCollapsed;
       _titleBarCache = WaveTitleBar(
         searchController: _searchController,
         searchFocus: _searchFocus,
@@ -176,6 +183,7 @@ class _WaveShellState extends ConsumerState<WaveShell> {
         onToggleRail: () => setState(() => _railExpanded = !_railExpanded),
         canGoBack: canGoBack,
         canGoForward: canGoForward,
+        sidebarCollapsed: sidebarCollapsed,
         onBack: _goBack,
         onForward: _goForward,
       );
@@ -830,7 +838,11 @@ class _WaveShellState extends ConsumerState<WaveShell> {
                     child: ClipRect(
                       child: Column(
                         children: [
-                          _titleBarFor(_backStack.isNotEmpty, _forwardStack.isNotEmpty),
+                          _titleBarFor(
+                            _backStack.isNotEmpty,
+                            _forwardStack.isNotEmpty,
+                            sidebarCollapsed: collapsed,
+                          ),
                         const WaveInfoBarHost(),
                         // Content + Context Panels
                         Expanded(

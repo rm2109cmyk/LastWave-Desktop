@@ -29,6 +29,7 @@ class WaveTitleBar extends ConsumerWidget {
   final VoidCallback onToggleRail;
   final bool canGoBack;
   final bool canGoForward;
+  final bool sidebarCollapsed;
   final VoidCallback? onBack;
   final VoidCallback? onForward;
   const WaveTitleBar({
@@ -40,6 +41,7 @@ class WaveTitleBar extends ConsumerWidget {
     required this.onToggleRail,
     required this.canGoBack,
     this.canGoForward = false,
+    this.sidebarCollapsed = false,
     this.onBack,
     this.onForward,
   });
@@ -213,7 +215,7 @@ class WaveTitleBar extends ConsumerWidget {
 
               return Row(
                 children: [
-                  const SizedBox(width: 16),
+                  SizedBox(width: sidebarCollapsed ? macOSTrafficLightWidth : 16),
 
                   // Sidebar Toggle
                   _MacToolbarBtn(

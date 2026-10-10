@@ -37,9 +37,8 @@ jobs:
       - name: Create build-time environment
         shell: bash
         run: |
-          # The upstream project injects ADDON_CLIENT_SECRET from its
-          # private GitHub Actions secret. Our fork does not have that
-          # secret, so leave it empty for UI/build testing.
+          # Empty addon secret for build and UI testing.
+          # Authenticated addon functionality may require the real secret.
           printf 'ADDON_CLIENT_SECRET=\n' > .env
 
       - name: Generate obfuscated secrets
@@ -68,6 +67,20 @@ jobs:
 
           echo "Found: $APP_PATH"
           du -sh "$APP_PATH"
+
+      - name: Ad-hoc sign macOS app
+        shell: bash
+        run: |
+          APP_PATH="build/macos/Build/Products/Release/lastwave_desktop.app"
+
+          echo "Applying ad-hoc signature..."
+          codesign --force --deep --sign - "$APP_PATH"
+
+          echo "Verifying signature..."
+          codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+
+          echo "Signature details:"
+          codesign -dv --verbose=2 "$APP_PATH" 2>&1
 
       - name: Package macOS application
         shell: bash

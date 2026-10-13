@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../components/buttons.dart' show LWTooltip;
+import '../theme/platform.dart';
 import '../theme/wave_icons.dart';
 
 import '../../app/track_actions.dart'
@@ -237,60 +238,64 @@ class _WaveSearchPageState extends ConsumerState<WaveSearchPage> {
                 style: WaveType.pageTitle.copyWith(fontSize: 22)),
           ),
           const SizedBox(height: 12),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: SizedBox(
-              width: fieldWidth,
-              child: TextBox(
-                controller: _controller,
-                focusNode: _focus,
-                autofocus: true,
-                placeholder: 'Songs, artists, albums…',
-                prefix: Padding(
-                  padding: const EdgeInsets.only(left: 8),
-                  child: Icon(WaveIcons.search,
-                      size: 15,
-                      color: dark
-                          ? WaveColors.textTertiary
-                          : WaveColors.lightTextTertiary),
-                ),
-                onChanged: _onChanged,
-                onSubmitted: (v) {
-                  if (showSuggestions && _suggestIndex >= 0) {
-                    final pick = suggestions[
-                        _suggestIndex.clamp(0, suggestions.length - 1)];
-                    _controller.text = pick.text;
-                    _submit(pick.text);
-                  } else {
-                    _submit(v);
-                  }
-                },
-              ),
-            ),
-          ),
-          if (showSuggestions) ...[
-            const SizedBox(height: 6),
+          // On macOS the toolbar provides the canonical search input;
+          // suppress the in-page duplicate field and suggestion dropdown.
+          if (!isMacOS) ...[
             Align(
               alignment: Alignment.centerLeft,
               child: SizedBox(
                 width: fieldWidth,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    for (var i = 0; i < suggestions.take(6).length; i++)
-                      _SuggestionRow(
-                        suggestion: suggestions[i],
-                        highlighted: i == _suggestIndex,
-                        onTap: () {
-                          _controller.text = suggestions[i].text;
-                          _submit(suggestions[i].text);
-                        },
-                        onHover: () => setState(() => _suggestIndex = i),
-                      ),
-                  ],
+                child: TextBox(
+                  controller: _controller,
+                  focusNode: _focus,
+                  autofocus: true,
+                  placeholder: 'Songs, artists, albums…',
+                  prefix: Padding(
+                    padding: const EdgeInsets.only(left: 8),
+                    child: Icon(WaveIcons.search,
+                        size: 15,
+                        color: dark
+                            ? WaveColors.textTertiary
+                            : WaveColors.lightTextTertiary),
+                  ),
+                  onChanged: _onChanged,
+                  onSubmitted: (v) {
+                    if (showSuggestions && _suggestIndex >= 0) {
+                      final pick = suggestions[
+                          _suggestIndex.clamp(0, suggestions.length - 1)];
+                      _controller.text = pick.text;
+                      _submit(pick.text);
+                    } else {
+                      _submit(v);
+                    }
+                  },
                 ),
               ),
             ),
+            if (showSuggestions) ...[
+              const SizedBox(height: 6),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: SizedBox(
+                  width: fieldWidth,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      for (var i = 0; i < suggestions.take(6).length; i++)
+                        _SuggestionRow(
+                          suggestion: suggestions[i],
+                          highlighted: i == _suggestIndex,
+                          onTap: () {
+                            _controller.text = suggestions[i].text;
+                            _submit(suggestions[i].text);
+                          },
+                          onHover: () => setState(() => _suggestIndex = i),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
           ],
           if (_submitted.isEmpty) ...[
             if (history.isNotEmpty) ...[

@@ -1989,7 +1989,7 @@ class _CookieImportDialogState extends State<_CookieImportDialog> {
               const SizedBox(height: 10),
               InfoBar(
                 title: const Text('Error'),
-                message: Text(_error!),
+                content: Text(_error!),
                 severity: InfoBarSeverity.error,
               ),
             ],

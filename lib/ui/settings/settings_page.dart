@@ -18,6 +18,7 @@ import '../../core/storage/prefs.dart';
 import '../../features/addons/addon_api.dart';
 import '../../features/innertube/innertube_api.dart';
 import '../../features/innertube/yt_library_providers.dart';
+import '../../features/innertube/browser_cookie_adopt.dart';
 import '../../features/innertube/yt_web_login.dart';
 import '../components/artwork.dart';
 import 'yt_profile_chooser.dart';
@@ -931,8 +932,13 @@ class _Ytm extends ConsumerWidget {
                 const Expanded(
                   child: Text('Not connected', style: WaveType.trackTitle),
                 ),
+                Button(
+                  onPressed: () => _showCookieImportDialog(context, ref),
+                  child: const Text('Import cookies'),
+                ),
+                const SizedBox(width: 8),
                 FilledButton(
-                  onPressed: () => _ytConnect(context, ref),
+                  onPressed: () => _showBrowserAdoptDialog(context, ref),
                   child: const Text('Connect'),
                 ),
               ],
@@ -1018,10 +1024,14 @@ class _Ytm extends ConsumerWidget {
     );
   }
 
-  /// In-app Google sign-in: opens music.youtube.com in a system
-  /// WebView, waits for login, captures cookies automatically, then
-  /// runs the shared roster upsert + chooser tail.
-  Future<void> _ytConnect(BuildContext context, WidgetRef ref) async {
+  Future<void> _ytConnect(BuildContext context, WidgetRef ref) =>
+      _ytConnectWebview(context, ref);
+}
+
+/// In-app Google sign-in: opens music.youtube.com in a system
+/// WebView, waits for login, captures cookies automatically, then
+/// runs the shared roster upsert + chooser tail.
+Future<void> _ytConnectWebview(BuildContext context, WidgetRef ref) async {
     var cancelled = false;
     // Non-blocking wait dialog — Cancel just stops listening; the
     // user closes the browser window via the native guard (hide).
@@ -1133,7 +1143,6 @@ class _Ytm extends ConsumerWidget {
     );
     await _refocusMain();
   }
-}
 
 /// Card buttons: Switch (multi-channel roster), Add (account/channel),
 /// Disconnect. Extracted so the row rebuilds cheaply.
@@ -1232,6 +1241,10 @@ class _CardActions extends ConsumerWidget {
             child: const Text('Cancel'),
           ),
           Button(
+            onPressed: () => Navigator.of(dialogContext).pop('import'),
+            child: const Text('Import cookies'),
+          ),
+          Button(
             onPressed: () => Navigator.of(dialogContext).pop('channel'),
             child: const Text('Brand channel'),
           ),
@@ -1245,6 +1258,8 @@ class _CardActions extends ConsumerWidget {
     if (mode == null || !context.mounted) return;
     if (mode == 'account') {
       await _ytAddAccount(context, ref);
+    } else if (mode == 'import') {
+      await _showBrowserAdoptDialog(context, ref);
     } else {
       await _ytAddChannel(context, ref);
     }
@@ -1450,7 +1465,15 @@ Future<void> _ytConnectCaptured(
   required String header,
   required String pageId,
 }) async {
-  final profile = await upsertYtCapture(ref, cookies: header, pageId: pageId);
+  YtProfile? profile;
+  try {
+    profile = await upsertYtCapture(ref, cookies: header, pageId: pageId);
+  } catch (e) {
+    if (context.mounted) {
+      await _showYtFail(context, 'Failed to authenticate YouTube Music session: $e');
+    }
+    return;
+  }
   if (!context.mounted) return;
   final roster = ref.read(ytProfilesProvider);
   final conn = ref.read(ytConnectionProvider);
@@ -1583,6 +1606,418 @@ Future<void> _refocusMain() async {
   try {
     await windowManager.focus();
   } catch (_) {}
+}
+
+Future<void> _showBrowserAdoptDialog(BuildContext context, WidgetRef ref) {
+  return showDialog(
+    context: context,
+    builder: (ctx) => _BrowserAdoptDialog(ref: ref),
+  );
+}
+
+Future<void> _showCookieImportDialog(BuildContext context, WidgetRef ref) {
+  return showDialog(
+    context: context,
+    builder: (ctx) => _CookieImportDialog(ref: ref),
+  );
+}
+
+class _BrowserAdoptDialog extends StatefulWidget {
+  final WidgetRef ref;
+  const _BrowserAdoptDialog({required this.ref});
+
+  @override
+  State<_BrowserAdoptDialog> createState() => _BrowserAdoptDialogState();
+}
+
+class _BrowserAdoptDialogState extends State<_BrowserAdoptDialog> {
+  List<BrowserProfile>? _profiles;
+  bool _loading = false;
+  String? _statusText;
+  String? _error;
+  bool _isSandboxPermError = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _scanProfiles();
+  }
+
+  void _scanProfiles() {
+    try {
+      _profiles = BrowserSessionAdopt.discoverProfiles();
+    } catch (e) {
+      _profiles = [];
+      _error = 'Failed to scan browser profiles: $e';
+    }
+  }
+
+  Future<void> _adopt(BrowserProfile profile) async {
+    setState(() {
+      _loading = true;
+      _statusText = 'Adopting session from ${profile.displayName}...';
+      _error = null;
+      _isSandboxPermError = false;
+    });
+
+    try {
+      final header = await BrowserSessionAdopt.adoptCookies(profile);
+      if (!mounted) return;
+      Navigator.of(context).pop();
+      await _ytConnectCaptured(
+        context,
+        widget.ref,
+        header: header,
+        pageId: '',
+      );
+    } on AdoptPermissionException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = e.message;
+        _isSandboxPermError = true;
+      });
+    } on AdoptException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = e.message;
+        _isSandboxPermError = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = 'Session adoption failed: $e';
+        _isSandboxPermError = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ContentDialog(
+      title: const Text('Connect YouTube Music'),
+      content: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 480),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (_loading) ...[
+              Row(
+                children: [
+                  const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: ProgressRing(),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      _statusText ?? 'Connecting to browser session...',
+                      style: const TextStyle(fontSize: 12),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+            ] else ...[
+              const Text(
+                'Connect LastWave with an account signed in on your browser:',
+                style: TextStyle(fontSize: 12),
+              ),
+              const SizedBox(height: 12),
+              if (_error != null) ...[
+                InfoBar(
+                  title: Text(_isSandboxPermError
+                      ? 'Sandbox Permission Restricted'
+                      : 'Adoption Error'),
+                  message: Text(
+                    _error!,
+                    style: const TextStyle(fontSize: 11),
+                  ),
+                  severity: _isSandboxPermError
+                      ? InfoBarSeverity.warning
+                      : InfoBarSeverity.error,
+                ),
+                if (_isSandboxPermError) ...[
+                  const SizedBox(height: 8),
+                  Button(
+                    onPressed: () {
+                      Navigator.of(context).pop();
+                      _showCookieImportDialog(context, widget.ref);
+                    },
+                    child: const Text('Import cookies manually instead'),
+                  ),
+                ],
+                const SizedBox(height: 12),
+              ],
+              if (_profiles != null && _profiles!.isNotEmpty) ...[
+                Flexible(
+                  child: ListView.separated(
+                    shrinkWrap: true,
+                    itemCount: _profiles!.length,
+                    separatorBuilder: (_, __) => const SizedBox(height: 6),
+                    itemBuilder: (ctx, i) {
+                      final p = _profiles![i];
+                      return Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 10, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: waveIsDark(context)
+                              ? const Color(0xFF252525)
+                              : const Color(0xFFF7F7F7),
+                          border: Border.all(
+                            color: waveDivider(context).withValues(alpha: 0.5),
+                          ),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(FluentIcons.globe, size: 20),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text(
+                                    p.browserName,
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.w600,
+                                      fontSize: 13,
+                                    ),
+                                  ),
+                                  Text(
+                                    'Profile: ${p.profileName}',
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      color: waveTextSecondary(context),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            FilledButton(
+                              onPressed: () => _adopt(p),
+                              child: const Text('Connect'),
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ] else if (_profiles != null && _profiles!.isEmpty) ...[
+                Text(
+                  'No supported browser profiles found (Arc, Google Chrome, Brave, Edge, Vivaldi).\n'
+                  'Make sure your browser is installed and signed in to music.youtube.com.',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: waveTextSecondary(context),
+                  ),
+                ),
+              ],
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        if (!_loading) ...[
+          Button(
+            onPressed: () {
+              Navigator.of(context).pop();
+              _showCookieImportDialog(context, widget.ref);
+            },
+            child: const Text('Import cookies'),
+          ),
+          Button(
+            onPressed: () {
+              Navigator.of(context).pop();
+              _ytConnectWebview(context, widget.ref);
+            },
+            child: const Text('Web Sign-In'),
+          ),
+        ],
+        Button(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+      ],
+    );
+  }
+}
+
+class _CookieImportDialog extends StatefulWidget {
+  final WidgetRef ref;
+  const _CookieImportDialog({required this.ref});
+
+  @override
+  State<_CookieImportDialog> createState() => _CookieImportDialogState();
+}
+
+class _CookieImportDialogState extends State<_CookieImportDialog> {
+  final _controller = TextEditingController();
+  bool _connecting = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Future<void> _pickFile() async {
+    try {
+      final res = await FilePicker.platform.pickFiles(
+        type: FileType.any,
+        dialogTitle: 'Select cookies file',
+      );
+      if (res != null && res.files.isNotEmpty) {
+        final filePath = res.files.first.path;
+        if (filePath != null) {
+          final content = await File(filePath).readAsString();
+          setState(() {
+            _controller.text = content.trim();
+            _error = null;
+          });
+        }
+      }
+    } catch (e) {
+      setState(() {
+        _error = 'Could not read file: $e';
+      });
+    }
+  }
+
+  Future<void> _submit() async {
+    final raw = _controller.text.trim();
+    if (raw.isEmpty) {
+      setState(() {
+        _error = 'Please paste cookies or pick a cookies file.';
+      });
+      return;
+    }
+
+    String normalized;
+    try {
+      normalized = InnerTubeMusicApi.normalizeCookies(raw);
+    } on FormatException catch (e) {
+      setState(() {
+        _error = e.message;
+      });
+      return;
+    } catch (e) {
+      setState(() {
+        _error = 'Invalid cookies: $e';
+      });
+      return;
+    }
+
+    setState(() {
+      _connecting = true;
+      _error = null;
+    });
+
+    try {
+      Navigator.of(context).pop();
+      await _ytConnectCaptured(
+        context,
+        widget.ref,
+        header: normalized,
+        pageId: '',
+      );
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _connecting = false;
+          _error = 'Connection failed: $e';
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ContentDialog(
+      title: const Text('Import YouTube Music Cookies'),
+      content: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 480),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Paste your session cookies (Cookie header, Netscape cookies.txt, or JSON) '
+              'from music.youtube.com, or select an exported cookies file:',
+              style: TextStyle(fontSize: 12),
+            ),
+            const SizedBox(height: 10),
+            TextBox(
+              controller: _controller,
+              maxLines: 5,
+              placeholder: 'SID=...; __Secure-3PAPISID=...; LOGIN_INFO=...',
+              style: const TextStyle(fontFamily: 'monospace', fontSize: 11),
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Button(
+                  onPressed: _pickFile,
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(FluentIcons.folder_open, size: 14),
+                      SizedBox(width: 6),
+                      Text('Pick file...'),
+                    ],
+                  ),
+                ),
+                const Spacer(),
+                Button(
+                  onPressed: () {
+                    Navigator.of(context).pop();
+                    _showBrowserAdoptDialog(context, widget.ref);
+                  },
+                  child: const Text('Adopt from browser instead'),
+                ),
+              ],
+            ),
+            if (_error != null) ...[
+              const SizedBox(height: 10),
+              InfoBar(
+                title: const Text('Error'),
+                message: Text(_error!),
+                severity: InfoBarSeverity.error,
+              ),
+            ],
+            if (_connecting) ...[
+              const SizedBox(height: 10),
+              const Row(
+                children: [
+                  SizedBox(width: 16, height: 16, child: ProgressRing()),
+                  SizedBox(width: 10),
+                  Text('Connecting to YouTube Music...',
+                      style: TextStyle(fontSize: 12)),
+                ],
+              ),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        Button(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: _connecting ? null : _submit,
+          child: const Text('Connect'),
+        ),
+      ],
+    );
+  }
 }
 
 /// Addon sources: personal addon URLs replace the built-in lossless

@@ -267,6 +267,27 @@ class YtConnection {
     this.profileEmail = '',
     this.activePageId = '',
   });
+
+  YtConnection copyWith({
+    bool? connected,
+    String? cookies,
+    String? accountName,
+    String? channelHandle,
+    String? photoUrl,
+    int? connectedAtMillis,
+    String? profileEmail,
+    String? activePageId,
+  }) =>
+      YtConnection(
+        connected: connected ?? this.connected,
+        cookies: cookies ?? this.cookies,
+        accountName: accountName ?? this.accountName,
+        channelHandle: channelHandle ?? this.channelHandle,
+        photoUrl: photoUrl ?? this.photoUrl,
+        connectedAtMillis: connectedAtMillis ?? this.connectedAtMillis,
+        profileEmail: profileEmail ?? this.profileEmail,
+        activePageId: activePageId ?? this.activePageId,
+      );
 }
 
 /// One selectable YouTube identity: a Google account's main channel
@@ -1004,6 +1025,67 @@ class InnerTubeMusicApi {
     // Deterministic order keeps the cache-key digest stable.
     final names = pairs.keys.toList()..sort();
     return names.map((n) => '$n=${pairs[n]}').join('; ');
+  }
+
+  /// Merges Set-Cookie response directives into an existing cookie jar string.
+  ///
+  /// Adapts Limusic's absorb_cookies pattern (crates/innertube/src/transport.rs):
+  /// Google rotates short-lived session tokens (__Secure-1PSIDTS / __Secure-3PSIDTS)
+  /// on authenticated responses. Absorbing them ensures long-lived sessions
+  /// don't fail due to token staleness (Limusic KI-2 fix).
+  static String mergeSetCookieHeaders(
+      String currentJar, List<String> setCookies) {
+    if (setCookies.isEmpty || currentJar.isEmpty) return currentJar;
+    final pairs = <String, String>{};
+
+    for (final part in currentJar.split(';')) {
+      final trimmed = part.trim();
+      if (trimmed.isEmpty) continue;
+      final idx = trimmed.indexOf('=');
+      if (idx > 0) {
+        pairs[trimmed.substring(0, idx).trim()] =
+            trimmed.substring(idx + 1).trim();
+      }
+    }
+
+    var changed = false;
+    for (final raw in setCookies) {
+      if (raw.trim().isEmpty) continue;
+      final firstDirective = raw.split(';').first.trim();
+      final eqIdx = firstDirective.indexOf('=');
+      if (eqIdx > 0) {
+        final name = firstDirective.substring(0, eqIdx).trim();
+        final value = firstDirective.substring(eqIdx + 1).trim();
+        if (name.isNotEmpty && value.isNotEmpty) {
+          if (pairs[name] != value) {
+            pairs[name] = value;
+            changed = true;
+          }
+        }
+      }
+    }
+
+    if (!changed) return currentJar;
+    final names = pairs.keys.toList()..sort();
+    return names.map((n) => '$n=${pairs[n]}').join('; ');
+  }
+
+  /// Absorbs rotated session cookies into the active connection and persists.
+  void _absorbSetCookies(List<String>? setCookies) {
+    if (setCookies == null || setCookies.isEmpty || !_connection.connected) {
+      return;
+    }
+    final existing = _connection.cookies;
+    if (existing.isEmpty) return;
+
+    final updated = mergeSetCookieHeaders(existing, setCookies);
+    if (updated != existing) {
+      _connection = _connection.copyWith(cookies: updated);
+      unawaited(_secure.writeYtCookies(updated));
+      if (kDebugMode) {
+        debugPrint('InnerTube: absorbed rotated session cookies');
+      }
+    }
   }
 
   Future<void> connect(String rawCookies) => connectAs(
@@ -1930,6 +2012,7 @@ class InnerTubeMusicApi {
               ),
             )
             .timeout(callTimeout ?? const Duration(seconds: 15));
+        _absorbSetCookies(res.headers.map['set-cookie']);
         final data = res.data;
         if (data == null || data.isEmpty) return const {};
         final decoded = jsonDecode(data);

@@ -18,9 +18,22 @@ import 'yt_webview_guard.dart';
 class YtWebLogin {
   YtWebLogin._();
 
+  /// Direct Google ServiceLogin URL redirecting to YouTube Music (Limusic style).
+  static const _serviceLoginUrl =
+      'https://accounts.google.com/ServiceLogin?service=youtube&continue=https://music.youtube.com/';
+  static const _addSessionUrl =
+      'https://accounts.google.com/AddSession?service=youtube&continue=https://music.youtube.com/';
   static const _loginUrl = 'https://music.youtube.com/';
   static const _pollInterval = Duration(seconds: 2);
   static const _timeout = Duration(minutes: 10);
+
+  /// Privacy-safe diagnostic logger for authentication steps.
+  /// NEVER logs cookie values, passwords, tokens, or auth headers.
+  static void logAuthStage(String stage, Map<String, dynamic> metadata) {
+    final metaStr =
+        metadata.entries.map((e) => '${e.key}=${e.value}').join(' ');
+    debugPrint('[YtWebAuth] $stage | $metaStr');
+  }
 
   static bool _inflight = false;
 
@@ -277,8 +290,8 @@ class YtWebLogin {
     final w = await _ensureWindow();
     if (w == null) return null;
     try {
-      // Same Windows gate bypass as _run (see comment there).
-      w.launch(_logoutUrl, triggerOnUrlRequestEvent: false);
+      logAuthStage('FreshStart', {'target': 'add_session', 'url': _addSessionUrl});
+      w.launch(_addSessionUrl, triggerOnUrlRequestEvent: false);
       // Show progress: the logout round-trip is the first visible
       // step of the add-account flow, and asserting z-order here
       // (not just after the later login launch) keeps the window
@@ -311,12 +324,8 @@ class YtWebLogin {
     final w = await _ensureWindow();
     if (w == null) return null;
     try {
-      // Windows: load directly without the navigation-approval round-trip.
-      // With triggerOnUrlRequestEvent=true (the default) native WebView2
-      // cancels the navigation and only re-issues it after a Dart
-      // round-trip; if that silently fails the window sits on about:blank
-      // forever.
-      w.launch(_loginUrl, triggerOnUrlRequestEvent: false);
+      logAuthStage('RunStart', {'target': 'service_login', 'url': _serviceLoginUrl});
+      w.launch(_serviceLoginUrl, triggerOnUrlRequestEvent: false);
       // Re-assert z-order AFTER navigation starts: a single
       // pre-launch foreground is what left the window behind the app
       // when Windows' foreground lock swallowed the attempt.
@@ -458,46 +467,67 @@ class YtWebLogin {
     } catch (_) {
       return null;
     }
-    String? pick(String name) {
-      for (final c in cookies) {
-        // Compare normalized names; a value of only a stray NUL counts
-        // as empty. Values are otherwise untouched (base64 padding is
-        // significant).
-        final v = _normValue(c.value);
-        if (_normName(c.name) == name && v.isNotEmpty) {
-          return v;
-        }
-      }
-      return null;
+    final header = extractCookiesFromList(cookies);
+    if (header != null && kDebugMode) {
+      debugPrint('YtWebLogin captured ${header.split('; ').length} cookies');
     }
+    return header;
+  }
 
-    final hasSapisid = pick('__Secure-3PAPISID') != null ||
-        pick('SAPISID') != null;
-    final loggedIn = pick('LOGIN_INFO') != null;
-    if (!hasSapisid || !loggedIn) return null;
+  /// Extracts and validates YouTube session cookies from the cookie list,
+  /// implementing Limusic-style domain matching and specificity sorting.
+  ///
+  /// Priority:
+  /// - music.youtube.com (rank 3)
+  /// - youtube.com / *.youtube.com (rank 2)
+  /// - google.com / *.google.com (rank 1)
+  ///
+  /// More specific domain versions override broader ones in collisions.
+  static String? extractCookiesFromList(List cookies) {
+    if (cookies.isEmpty) return null;
 
-    // Jar may hold cookies from other Google properties; keep only
-    // YouTube/Google session cookies for the header.
     final pairs = <String, String>{};
+    final rankMap = <String, int>{};
+
     for (final c in cookies) {
-      final domain = c.domain.toLowerCase();
-      if (!domain.contains('youtube.com') &&
-          !domain.contains('google.com')) {
+      final domain = (c.domain?.toString() ?? '').toLowerCase();
+      int rank = 0;
+      if (domain == 'music.youtube.com') {
+        rank = 3;
+      } else if (domain == 'youtube.com' || domain.endsWith('.youtube.com')) {
+        rank = 2;
+      } else if (domain == 'google.com' || domain.endsWith('.google.com')) {
+        rank = 1;
+      } else {
         continue;
       }
+
       final normName = _normName(c.name);
       final normValue = _normValue(c.value);
       if (normName.isEmpty || normValue.isEmpty) continue;
+
+      final currentRank = rankMap[normName] ?? 0;
+      if (currentRank > rank) continue;
+
       pairs[normName] = normValue;
+      rankMap[normName] = rank;
     }
-    if (pairs.isEmpty) return null;
+
+    final hasSapisid = pairs.containsKey('__Secure-3PAPISID') ||
+        pairs.containsKey('SAPISID') ||
+        pairs.containsKey('APISID');
+    final loggedIn = pairs.containsKey('LOGIN_INFO');
+
+    logAuthStage('CookieCheck', {
+      'totalInJar': cookies.length,
+      'matchedCount': pairs.length,
+      'hasSapisid': hasSapisid,
+      'hasLoginInfo': loggedIn,
+    });
+
+    if (!hasSapisid || !loggedIn) return null;
+
     final names = pairs.keys.toList()..sort();
-    final header =
-        names.map((n) => '$n=${pairs[n]}').join('; ');
-    if (kDebugMode) {
-      debugPrint(
-          'YtWebLogin captured ${pairs.length} cookies');
-    }
-    return header;
+    return names.map((n) => '$n=${pairs[n]}').join('; ');
   }
 }

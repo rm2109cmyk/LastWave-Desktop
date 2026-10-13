@@ -1733,7 +1733,7 @@ class _BrowserAdoptDialogState extends State<_BrowserAdoptDialog> {
                   title: Text(_isSandboxPermError
                       ? 'Sandbox Permission Restricted'
                       : 'Adoption Error'),
-                  message: Text(
+                  content: Text(
                     _error!,
                     style: const TextStyle(fontSize: 11),
                   ),

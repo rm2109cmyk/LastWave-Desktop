@@ -1869,27 +1869,28 @@ class _CookieImportDialogState extends State<_CookieImportDialog> {
   }
 
   Future<void> _pickFile() async {
-    try {
-      final res = await FilePicker.platform.pickFiles(
-        type: FileType.any,
-        dialogTitle: 'Select cookies file',
-      );
-      if (res != null && res.files.isNotEmpty) {
-        final filePath = res.files.first.path;
-        if (filePath != null) {
-          final content = await File(filePath).readAsString();
-          setState(() {
-            _controller.text = content.trim();
-            _error = null;
-          });
-        }
+  try {
+    final file = await FilePicker.pickFile(
+      type: FileType.any,
+      dialogTitle: 'Select cookies file',
+    );
+  
+    if (file != null) {
+      final filePath = file.path;
+      if (filePath != null) {
+        final content = await File(filePath).readAsString();
+        setState(() {
+          _controller.text = content.trim();
+          _error = null;
+        });
       }
+    }
     } catch (e) {
       setState(() {
         _error = 'Could not read file: $e';
       });
     }
-  }
+    }
 
   Future<void> _submit() async {
     final raw = _controller.text.trim();

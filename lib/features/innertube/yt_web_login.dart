@@ -333,10 +333,18 @@ class YtWebLogin {
       if (kDebugMode) {
         debugPrint('YtWebLogin: window launched');
       }
+      final waitTimer = Stopwatch()..start();
       final header = await _waitForLogin(w).timeout(
         _timeout,
-        onTimeout: () => null,
+        onTimeout: () {
+          logAuthStage('WaitEnd', {'reason': 'timeout'});
+          return null;
+        },
       );
+      logAuthStage('WaitResult', {
+        'captured': header != null,
+        'elapsedSec': waitTimer.elapsed.inSeconds,
+      });
       // Capture the active channel alongside the jar (null = main).
       // Best-effort: a miss just means main-channel routing.
       lastCapturedPageId = null;
@@ -377,6 +385,7 @@ class YtWebLogin {
   /// so when the stall text persists, the login page is reloaded
   /// in place (cookies survive) instead of polling forever.
   static Future<String?> _waitForLogin(Webview webview) async {
+    _loggedReadFailure = false;
     // Give the page a moment to load before the first read.
     await Future<void>.delayed(const Duration(seconds: 4));
     var closed = false;
@@ -421,6 +430,7 @@ class YtWebLogin {
       }
       await Future<void>.delayed(_pollInterval);
     }
+    logAuthStage('WaitEnd', {'reason': 'window_closed'});
     return null;
   }
 
@@ -453,6 +463,8 @@ class YtWebLogin {
     return s;
   }
 
+  static bool _loggedReadFailure = false;
+
   /// Returns a Cookie header once login markers are present, else null.
   ///
   /// (Untyped locals: `WebviewCookie` lives in the package's
@@ -464,7 +476,14 @@ class YtWebLogin {
       cookies = await webview
           .getAllCookies()
           .timeout(const Duration(seconds: 5));
-    } catch (_) {
+    } catch (e) {
+      // Previously swallowed: a failing cookie read looked identical to
+      // "user has not finished signing in". Log the error TYPE once per wait.
+      if (!_loggedReadFailure) {
+        _loggedReadFailure = true;
+        logAuthStage(
+            'CookieReadFailed', {'errorType': e.runtimeType.toString()});
+      }
       return null;
     }
     final header = extractCookiesFromList(cookies);
@@ -523,6 +542,12 @@ class YtWebLogin {
       'matchedCount': pairs.length,
       'hasSapisid': hasSapisid,
       'hasLoginInfo': loggedIn,
+      // Names only, never values.
+      'names': (pairs.keys.toList()..sort()),
+      'missing': [
+        if (!hasSapisid) 'SAPISID-family',
+        if (!loggedIn) 'LOGIN_INFO',
+      ],
     });
 
     if (!hasSapisid || !loggedIn) return null;

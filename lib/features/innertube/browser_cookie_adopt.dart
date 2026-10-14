@@ -16,7 +16,7 @@ import 'dart:ffi';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:crypto/crypto.dart' show Hmac, sha1;
+import 'package:crypto/crypto.dart' show Hmac, sha1, sha256;
 import 'package:ffi/ffi.dart';
 import 'package:flutter/foundation.dart';
 import 'package:sqlite3/sqlite3.dart';
@@ -294,13 +294,260 @@ Uint8List deriveChromiumKey(String password) {
 }
 
 // ---------------------------------------------------------------------------
+// Cookie database access (pure helpers; unit-tested without a browser)
+// ---------------------------------------------------------------------------
+
+/// Query for YouTube/Google cookies. The LIKE patterns are BOUND parameters
+/// ([cookieQueryParams]). Inlining them as `"%google.com"` is a bug: SQLite
+/// parses a double-quoted token as an identifier first, so it fails with
+/// `no such column: "%google.com"`.
+const String cookieQuerySql = 'SELECT host_key, name, value, encrypted_value '
+    'FROM cookies WHERE host_key LIKE ? OR host_key LIKE ?';
+
+/// Bound values for [cookieQuerySql].
+const List<Object?> cookieQueryParams = ['%youtube.com', '%google.com'];
+
+/// From Chromium cookie-DB `meta.version` 24 onward, the plaintext inside every
+/// encrypted value is `SHA-256(host_key) || value`. Chromium itself verifies
+/// the hash on load and rejects the cookie on mismatch (CookieLoadProblem::
+/// kHashFailed in sqlite_persistent_cookie_store.cc); so do we.
+const int cookieHashPrefixMinMetaVersion = 24;
+
+/// AES-128-CBC decryptor signature (injectable so tests need no CommonCrypto).
+typedef CookieDecryptFn = Uint8List? Function(
+    Uint8List key, Uint8List ciphertext);
+
+/// Reads Chromium's `meta.version`.
+///
+/// Returns null when it cannot be determined (no `meta` table, no `version`
+/// row, a non-numeric value, or a SQLite error). That is deliberately NOT
+/// mapped to 0: "unknown" is not the same as "genuinely pre-v24", and
+/// guessing wrong either way corrupts or mis-validates cookie values.
+int? readCookieMetaVersion(Database db) {
+  try {
+    final rows =
+        db.select('SELECT value FROM meta WHERE key = ?', ['version']);
+    if (rows.isEmpty) return null;
+    final v = rows.first['value'];
+    if (v is int) return v;
+    return int.tryParse(v?.toString().trim() ?? '');
+  } on SqliteException {
+    return null;
+  }
+}
+
+/// Why a cookie row could not be turned into a value. Never carries values.
+enum CookieDecodeFailure {
+  /// Not a `v10` blob (or too short to be one).
+  unsupportedFormat,
+
+  /// `meta.version` unreadable, so the plaintext layout is unknown.
+  versionUnknown,
+
+  /// AES decryption itself failed (bad key/padding).
+  decryptFailed,
+
+  /// v24+ plaintext shorter than the 32-byte host hash.
+  plaintextTooShort,
+
+  /// v24+ host hash does not match SHA-256 of the stored `host_key`.
+  hostHashMismatch,
+
+  /// Remaining bytes are not valid UTF-8.
+  invalidUtf8,
+
+  /// Decoded fine but the cookie value is empty.
+  emptyValue,
+}
+
+/// Either a decoded [value] or a [failure] reason; never both.
+class CookieDecodeResult {
+  final String? value;
+  final CookieDecodeFailure? failure;
+  const CookieDecodeResult.ok(this.value) : failure = null;
+  const CookieDecodeResult.failed(this.failure) : value = null;
+}
+
+bool _hasHostHashPrefix(Uint8List plaintext, String hostKey) {
+  final expected = sha256.convert(utf8.encode(hostKey)).bytes;
+  if (plaintext.length < expected.length) return false;
+  var diff = 0;
+  for (var i = 0; i < expected.length; i++) {
+    diff |= expected[i] ^ plaintext[i];
+  }
+  return diff == 0;
+}
+
+/// Decodes one cookie row to its value or a failure reason.
+///
+/// [hostKey] must be the EXACT stored `host_key` string (not lower-cased,
+/// leading dot kept): Chromium hashes that representation.
+///
+/// Plain `value` wins. Otherwise a `v10` blob is decrypted. For
+/// [metaVersion] >= 24 the first 32 bytes must equal SHA-256([hostKey]); on
+/// mismatch the cookie is rejected and the bytes are NEVER reinterpreted as a
+/// value. An unknown [metaVersion] fails closed for encrypted values.
+CookieDecodeResult decodeChromiumCookieValue({
+  required String hostKey,
+  required Object? plainValue,
+  required Object? encryptedValue,
+  required Uint8List key,
+  required int? metaVersion,
+  CookieDecryptFn? decrypt,
+}) {
+  if (plainValue is String && plainValue.isNotEmpty) {
+    return CookieDecodeResult.ok(plainValue);
+  }
+  if (encryptedValue is! Uint8List || encryptedValue.length <= 3) {
+    return const CookieDecodeResult.failed(
+        CookieDecodeFailure.unsupportedFormat);
+  }
+  // "v10" prefix (macOS Chromium AES-128-CBC). Other prefixes unsupported.
+  if (encryptedValue[0] != 0x76 ||
+      encryptedValue[1] != 0x31 ||
+      encryptedValue[2] != 0x30) {
+    return const CookieDecodeResult.failed(
+        CookieDecodeFailure.unsupportedFormat);
+  }
+  if (metaVersion == null) {
+    return const CookieDecodeResult.failed(CookieDecodeFailure.versionUnknown);
+  }
+
+  final plaintext = (decrypt ?? _CommonCrypto.decryptAes128Cbc)(
+      key, Uint8List.sublistView(encryptedValue, 3));
+  if (plaintext == null) {
+    return const CookieDecodeResult.failed(CookieDecodeFailure.decryptFailed);
+  }
+
+  var bytes = plaintext;
+  if (metaVersion >= cookieHashPrefixMinMetaVersion) {
+    if (bytes.length < 32) {
+      return const CookieDecodeResult.failed(
+          CookieDecodeFailure.plaintextTooShort);
+    }
+    if (!_hasHostHashPrefix(bytes, hostKey)) {
+      return const CookieDecodeResult.failed(
+          CookieDecodeFailure.hostHashMismatch);
+    }
+    bytes = Uint8List.sublistView(bytes, 32);
+  }
+
+  final String value;
+  try {
+    value = utf8.decode(bytes).trim();
+  } on FormatException {
+    return const CookieDecodeResult.failed(CookieDecodeFailure.invalidUtf8);
+  }
+  if (value.isEmpty) {
+    return const CookieDecodeResult.failed(CookieDecodeFailure.emptyValue);
+  }
+  return CookieDecodeResult.ok(value);
+}
+
+/// Outcome of reading the cookie table (counts only; never values).
+class CookieReadResult {
+  final Map<String, String> cookies;
+
+  /// Null when `meta.version` could not be read (see [readCookieMetaVersion]).
+  final int? metaVersion;
+  final int encryptedSeen;
+
+  /// Encrypted rows that failed for any reason (includes [hashMismatch]).
+  final int decryptFailed;
+
+  /// Subset of [decryptFailed]: v24+ host-hash verification failures.
+  final int hashMismatch;
+
+  const CookieReadResult({
+    required this.cookies,
+    required this.metaVersion,
+    required this.encryptedSeen,
+    required this.decryptFailed,
+    required this.hashMismatch,
+  });
+}
+
+/// Runs [cookieQuerySql] on [db], decodes each row and keeps the most
+/// specific domain per cookie name (music.youtube.com > youtube.com >
+/// google.com). Hosts that merely end in the same letters (e.g.
+/// `evilgoogle.com`) match the LIKE pattern but are skipped.
+CookieReadResult readCookiesFromDatabase(
+  Database db,
+  Uint8List key, {
+  CookieDecryptFn? decrypt,
+}) {
+  final metaVersion = readCookieMetaVersion(db);
+  final results = <String, String>{};
+  final rankMap = <String, int>{};
+  var encryptedSeen = 0;
+  var decryptFailed = 0;
+  var hashMismatch = 0;
+
+  final rows = db.select(cookieQuerySql, cookieQueryParams);
+  for (final row in rows) {
+    // Exact stored representation: this is what Chromium hashes.
+    final storedHostKey = row['host_key'] as String? ?? '';
+    final hostKey = storedHostKey.toLowerCase();
+    final name = (row['name'] as String? ?? '').trim();
+    if (name.isEmpty) continue;
+
+    int rank = 0;
+    if (hostKey == 'music.youtube.com') {
+      rank = 3;
+    } else if (hostKey == 'youtube.com' || hostKey.endsWith('.youtube.com')) {
+      rank = 2;
+    } else if (hostKey == 'google.com' || hostKey.endsWith('.google.com')) {
+      rank = 1;
+    }
+    if (rank == 0) continue;
+
+    final currentRank = rankMap[name] ?? 0;
+    if (currentRank > rank) continue;
+
+    final plain = row['value'];
+    final enc = row['encrypted_value'];
+    final needsDecrypt = !(plain is String && plain.isNotEmpty) &&
+        enc is Uint8List &&
+        enc.isNotEmpty;
+    if (needsDecrypt) encryptedSeen++;
+
+    final result = decodeChromiumCookieValue(
+      hostKey: storedHostKey,
+      plainValue: plain,
+      encryptedValue: enc,
+      key: key,
+      metaVersion: metaVersion,
+      decrypt: decrypt,
+    );
+    final val = result.value;
+    if (val == null) {
+      if (needsDecrypt && result.failure != CookieDecodeFailure.emptyValue) {
+        decryptFailed++;
+        if (result.failure == CookieDecodeFailure.hostHashMismatch) {
+          hashMismatch++;
+        }
+      }
+      continue;
+    }
+    results[name] = val;
+    rankMap[name] = rank;
+  }
+
+  return CookieReadResult(
+    cookies: results,
+    metaVersion: metaVersion,
+    encryptedSeen: encryptedSeen,
+    decryptFailed: decryptFailed,
+    hashMismatch: hashMismatch,
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main Adoption Logic
 // ---------------------------------------------------------------------------
 
 class BrowserSessionAdopt {
   BrowserSessionAdopt._();
-
-  static const _v10Prefix = [0x76, 0x31, 0x30]; // "v10"
 
   /// Stage 1: Discovers installed Chromium browser profiles on macOS.
   static List<BrowserProfile> discoverProfiles() {
@@ -391,6 +638,11 @@ class BrowserSessionAdopt {
   }
 
   /// Stage 3: Retrieves Chromium Safe Storage password from macOS Keychain.
+  ///
+  /// Throws [AdoptDecryptionException] when the password cannot be read.
+  /// macOS Chromium browsers always derive their cookie key from this
+  /// Keychain item, so guessing a default password would only yield a wrong
+  /// key and silently undecryptable cookies.
   static Future<String> getSafeStoragePassword(BrowserProfile profile) async {
     _BrowserConfig? config;
     for (final c in _supportedBrowsers) {
@@ -399,7 +651,10 @@ class BrowserSessionAdopt {
         break;
       }
     }
-    if (config == null) return 'peanuts';
+    if (config == null) {
+      throw AdoptDecryptionException(
+          'Unsupported browser: ${profile.browserName}');
+    }
 
     try {
       final res = await Process.run('/usr/bin/security', [
@@ -411,33 +666,29 @@ class BrowserSessionAdopt {
         config.keychainAccount,
       ]);
 
-      if (res.exitCode == 0) {
-        final pw = (res.stdout as String).trim();
-        _adoptLog('Stage3_Keychain', {
-          'browser': config.name,
-          'service': config.keychainService,
-          'exitCode': 0,
-          'hasPassword': pw.isNotEmpty,
-        });
-        if (pw.isNotEmpty) return pw;
-      } else {
-        _adoptLog('Stage3_Keychain', {
-          'browser': config.name,
-          'service': config.keychainService,
-          'exitCode': res.exitCode,
-          'status': 'FALLBACK_TO_DEFAULT',
-        });
-      }
+      final pw = res.exitCode == 0 ? (res.stdout as String).trim() : '';
+      _adoptLog('Stage3_Keychain', {
+        'browser': config.name,
+        'service': config.keychainService,
+        'exitCode': res.exitCode,
+        'hasPassword': pw.isNotEmpty,
+      });
+      if (pw.isNotEmpty) return pw;
+      throw AdoptDecryptionException(
+        'Could not read "${config.keychainService}" from the macOS Keychain '
+        '(exit code ${res.exitCode}). If a Keychain prompt appeared, choose '
+        '"Allow" or "Always Allow", then try again.',
+      );
+    } on AdoptException {
+      rethrow;
     } catch (e) {
       _adoptLog('Stage3_Keychain', {
         'browser': config.name,
         'error': e.runtimeType.toString(),
-        'status': 'FALLBACK_TO_DEFAULT',
       });
+      throw AdoptDecryptionException(
+          'Could not run the macOS Keychain lookup (${e.runtimeType}).');
     }
-
-    // Chromium default fallback password on macOS/Linux
-    return 'peanuts';
   }
 
   /// Runs the full 6-stage adoption flow for a selected [profile].
@@ -490,14 +741,42 @@ class BrowserSessionAdopt {
       final key = deriveChromiumKey(password);
       _adoptLog('Stage4_Decryption', {'keyDerived': true, 'keyBytes': key.length});
 
-      final rawCookies = _readAndDecryptCookies(tempDb, key);
+      final read = _readAndDecryptCookies(tempDb, key);
       _adoptLog('Stage4_Decryption', {
-        'extractedCount': rawCookies.length,
-        'names': rawCookies.keys.toList(),
+        'metaVersion': read.metaVersion ?? 'unknown',
+        'extractedCount': read.cookies.length,
+        'encryptedSeen': read.encryptedSeen,
+        'decryptFailed': read.decryptFailed,
+        'hashMismatch': read.hashMismatch,
+        'names': read.cookies.keys.toList(),
       });
 
       // Stage 4 validation
-      final cookieHeader = _filterAndFormatCookies(rawCookies);
+      final String cookieHeader;
+      try {
+        cookieHeader = filterAndFormatCookies(read.cookies);
+      } on AdoptValidationException {
+        // Missing auth cookies *because* decryption failed is a
+        // decryption problem, not a "you are signed out" problem.
+        if (read.decryptFailed > 0) {
+          final String reason;
+          if (read.metaVersion == null) {
+            reason = 'The cookie database version could not be read, so '
+                'the cookies were not decrypted.';
+          } else if (read.hashMismatch > 0) {
+            reason = '${read.hashMismatch} cookies failed the host integrity '
+                'check (wrong key or an unexpected database format).';
+          } else {
+            reason = 'Make sure "${profile.browserName} Safe Storage" access '
+                'was allowed in the macOS Keychain prompt, then try again.';
+          }
+          throw AdoptDecryptionException(
+            'Could not decrypt ${read.decryptFailed} of ${read.encryptedSeen} '
+            'browser cookies, so no usable session was found. $reason',
+          );
+        }
+        rethrow;
+      }
       _adoptLog('Stage4_Validation', {'success': true, 'headerLength': cookieHeader.length});
 
       return cookieHeader;
@@ -508,69 +787,18 @@ class BrowserSessionAdopt {
     }
   }
 
-  static Map<String, String> _readAndDecryptCookies(File dbFile, Uint8List key) {
+  static CookieReadResult _readAndDecryptCookies(
+      File dbFile, Uint8List key) {
     final db = sqlite3.open(dbFile.path, mode: OpenMode.readOnly);
-    final results = <String, String>{};
-
-    // Domain specificity map: keeps track of domain rank per cookie name
-    // rank: 3 = music.youtube.com, 2 = .youtube.com, 1 = .google.com
-    final rankMap = <String, int>{};
-
     try {
-      final rows = db.select(
-        'SELECT host_key, name, value, encrypted_value '
-        'FROM cookies '
-        'WHERE host_key LIKE "%youtube.com" OR host_key LIKE "%google.com"',
-      );
-
-      for (final row in rows) {
-        final hostKey = (row['host_key'] as String? ?? '').toLowerCase();
-        final name = (row['name'] as String? ?? '').trim();
-        if (name.isEmpty) continue;
-
-        int rank = 0;
-        if (hostKey == 'music.youtube.com') {
-          rank = 3;
-        } else if (hostKey == 'youtube.com' || hostKey.endsWith('.youtube.com')) {
-          rank = 2;
-        } else if (hostKey == 'google.com' || hostKey.endsWith('.google.com')) {
-          rank = 1;
-        }
-
-        // If we already have this cookie from a higher or equal rank domain, skip
-        final currentRank = rankMap[name] ?? 0;
-        if (currentRank > rank) continue;
-
-        String? val = row['value'] as String?;
-        if (val == null || val.isEmpty) {
-          final encBlob = row['encrypted_value'];
-          if (encBlob is Uint8List && encBlob.length > 3) {
-            // Check v10 prefix
-            if (encBlob[0] == _v10Prefix[0] &&
-                encBlob[1] == _v10Prefix[1] &&
-                encBlob[2] == _v10Prefix[2]) {
-              final ciphertext = encBlob.sublist(3);
-              final decrypted = _CommonCrypto.decryptAes128Cbc(key, ciphertext);
-              if (decrypted != null) {
-                val = utf8.decode(decrypted, allowMalformed: true).trim();
-              }
-            }
-          }
-        }
-
-        if (val != null && val.isNotEmpty) {
-          results[name] = val;
-          rankMap[name] = rank;
-        }
-      }
+      return readCookiesFromDatabase(db, key);
     } finally {
       db.dispose();
     }
-
-    return results;
   }
 
-  static String _filterAndFormatCookies(Map<String, String> cookies) {
+  @visibleForTesting
+  static String filterAndFormatCookies(Map<String, String> cookies) {
     const sapisidKeys = ['__Secure-3PAPISID', 'SAPISID', 'APISID'];
     const loginMarkers = ['LOGIN_INFO', 'SID', '__Secure-3PSID', '__Secure-1PSID'];
 

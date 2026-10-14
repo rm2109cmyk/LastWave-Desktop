@@ -358,6 +358,9 @@ enum CookieDecodeFailure {
 
   /// Decoded fine but the cookie value is empty.
   emptyValue,
+
+  /// Both the plaintext and encrypted cookie fields are populated.
+  valuesBothPresent,
 }
 
 /// Either a decoded [value] or a [failure] reason; never both.
@@ -396,6 +399,10 @@ CookieDecodeResult decodeChromiumCookieValue({
   CookieDecryptFn? decrypt,
 }) {
   if (plainValue is String && plainValue.isNotEmpty) {
+    if (encryptedValue is Uint8List && encryptedValue.isNotEmpty) {
+      return const CookieDecodeResult.failed(
+          CookieDecodeFailure.valuesBothPresent);
+    }
     return CookieDecodeResult.ok(plainValue);
   }
   if (encryptedValue is! Uint8List || encryptedValue.length <= 3) {
@@ -506,10 +513,9 @@ CookieReadResult readCookiesFromDatabase(
 
     final plain = row['value'];
     final enc = row['encrypted_value'];
-    final needsDecrypt = !(plain is String && plain.isNotEmpty) &&
-        enc is Uint8List &&
-        enc.isNotEmpty;
-    if (needsDecrypt) encryptedSeen++;
+    final hasEncrypted = enc is Uint8List && enc.isNotEmpty;
+    final needsDecrypt = !(plain is String && plain.isNotEmpty) && hasEncrypted;
+    if (hasEncrypted) encryptedSeen++;
 
     final result = decodeChromiumCookieValue(
       hostKey: storedHostKey,
@@ -521,7 +527,7 @@ CookieReadResult readCookiesFromDatabase(
     );
     final val = result.value;
     if (val == null) {
-      if (needsDecrypt && result.failure != CookieDecodeFailure.emptyValue) {
+      if (hasEncrypted && result.failure != CookieDecodeFailure.emptyValue) {
         decryptFailed++;
         if (result.failure == CookieDecodeFailure.hostHashMismatch) {
           hashMismatch++;

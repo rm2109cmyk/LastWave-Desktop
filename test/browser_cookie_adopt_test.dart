@@ -211,6 +211,30 @@ void main() {
   });
 
   group('cookie decryption', () {
+    test('rejects rows with both plaintext and encrypted values', () {
+      final db = _cookieDb(metaVersion: 24);
+      addTearDown(db.dispose);
+
+      _insert(
+        db,
+        '.youtube.com',
+        'BOTH_VALUES',
+        value: 'fake-plaintext',
+        encrypted: _v24Blob('.youtube.com', 'fake-encrypted'),
+      );
+
+      final result = readCookiesFromDatabase(
+        db,
+        _key,
+        decrypt: (key, ciphertext) =>
+            fail('Decoder should reject this row before decryption'),
+      );
+
+      expect(result.cookies, isEmpty);
+      expect(result.encryptedSeen, 1);
+      expect(result.decryptFailed, 1);
+    });
+
     test('meta version >= 24: verifies the host hash, then strips it', () {
       final db = _cookieDb(metaVersion: 24);
       addTearDown(db.dispose);

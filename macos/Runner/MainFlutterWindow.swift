@@ -28,6 +28,31 @@ class MainFlutterWindow: NSWindow {
 
     RegisterGeneratedPlugins(registry: flutterViewController)
 
+    // The material above resolves against this window's effective
+    // appearance, which by default is the *macOS system* appearance, not
+    // the app's own Pearl/Midnight choice. Dart (lib/app/window.dart) pins
+    // the window appearance through this channel so the sidebar material,
+    // traffic lights and other native chrome track the in-app theme.
+    let appearanceChannel = FlutterMethodChannel(
+      name: "lastwave/window_appearance",
+      binaryMessenger: flutterViewController.engine.binaryMessenger)
+    appearanceChannel.setMethodCallHandler { [weak self] call, result in
+      guard call.method == "setAppearance" else {
+        result(FlutterMethodNotImplemented)
+        return
+      }
+      switch call.arguments as? String {
+      case "light":
+        self?.appearance = NSAppearance(named: .aqua)
+      case "dark":
+        self?.appearance = NSAppearance(named: .darkAqua)
+      default:
+        // nil = follow the system appearance again.
+        self?.appearance = nil
+      }
+      result(nil)
+    }
+
     super.awakeFromNib()
   }
 }

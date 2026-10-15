@@ -50,7 +50,7 @@ Future<void> main(List<String> args) async {
   final database = await AppDatabase.open();
   OfficialArtworkService.instance.init(db: database);
 
-  await setupWindow();
+  await setupWindow(isLight: prefs.isLight);
 
   // Cap the on-disk image cache that backs CachedNetworkImage (default
   // keeps 200+ files / 30 days → 759 CacheObjects in the heap dump).

@@ -15,8 +15,11 @@ import '../ui/theme/platform.dart';
 /// Everything is best-effort — failures are swallowed so the app
 /// always starts, even on platforms missing a backend. Opaque
 /// observatory surfaces are the polished fallback.
-Future<void> setupWindow() async {
+Future<void> setupWindow({bool? isLight}) async {
   await _setupAcrylic();
+  // macOS: pin the native appearance to the saved in-app theme before the
+  // window is shown, so the first frame never uses the system appearance.
+  if (isLight != null) await _setMacOSAppearance(isLight: isLight);
   try {
     await windowManager.ensureInitialized();
     // Route every close request (× button, Alt+F4) through Dart
@@ -63,9 +66,26 @@ Future<void> _setupAcrylic() async {
   }
 }
 
+const _macOSAppearanceChannel = MethodChannel('lastwave/window_appearance');
+
+/// macOS only: set the NSWindow appearance (aqua / darkAqua) to the app's
+/// Pearl/Midnight theme. The NSVisualEffectView in MainFlutterWindow.swift
+/// renders the sidebar material from the window's effective appearance, which
+/// otherwise follows the macOS system setting and ignores the in-app theme.
+Future<void> _setMacOSAppearance({required bool isLight}) async {
+  if (!isMacOS) return;
+  try {
+    await _macOSAppearanceChannel.invokeMethod<void>(
+        'setAppearance', isLight ? 'light' : 'dark');
+  } catch (_) {}
+}
+
 /// Switch the native material when the pearl/midnight theme changes.
 Future<void> applyWindowMaterial({required bool isLight}) async {
-  if (isMacOS) return;
+  if (isMacOS) {
+    await _setMacOSAppearance(isLight: isLight);
+    return;
+  }
   try {
     await Window.setEffect(
       effect: WindowEffect.mica,

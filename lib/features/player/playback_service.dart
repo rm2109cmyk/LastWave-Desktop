@@ -740,6 +740,11 @@ class PlaybackService extends StateNotifier<PlayerSnapshot> {
     } catch (_) {}
   }
 
+  /// True when [next] would actually move to another queue item
+  /// (shuffle/repeat aware). Used by system media controls so the Next
+  /// button is only enabled when it can act.
+  bool get canSkipNext => _nextIndex() != null;
+
   Future<void> next() async {
     final nextIndex = _nextIndex();
     if (nextIndex == null) return;

@@ -28,6 +28,11 @@ class MainFlutterWindow: NSWindow {
 
     RegisterGeneratedPlugins(registry: flutterViewController)
 
+    // System Now Playing / media keys. Dart (lib/features/nowplaying)
+    // owns playback state; this only mirrors it and forwards commands.
+    NowPlayingBridge.shared.attach(
+      messenger: flutterViewController.engine.binaryMessenger)
+
     // The material above resolves against this window's effective
     // appearance, which by default is the *macOS system* appearance, not
     // the app's own Pearl/Midnight choice. Dart (lib/app/window.dart) pins

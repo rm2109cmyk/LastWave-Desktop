@@ -23,7 +23,8 @@ import 'package:flutter/services.dart';
 /// - Typing (text fields) always wins for Space/arrows/Ctrl+L; only
 ///   Ctrl+K / Ctrl+F / Ctrl+Alt+P/N/B / Esc reach the shell while typing.
 /// - Hardware media keys are NOT handled here (MPRIS owns them on
-///   Linux, SMTC on Windows — see `isSystemMediaKey`). Returning false
+///   Linux, SMTC on Windows, MPRemoteCommandCenter on macOS — see
+///   `isSystemMediaKey`). Returning false
 ///   (not swallowing) keeps that single-owner contract so a focused
 ///   press can never double-fire through both paths.
 class WaveHotkeyActions {
@@ -120,8 +121,8 @@ WaveKeyNavScope? _navScope() {
   return ctx.findAncestorWidgetOfExactType<WaveKeyNavScope>();
 }
 
-/// True for OS-level media/volume keys. SMTC (Windows) and MPRIS
-/// (Linux) own these — the in-app dispatcher must never swallow them,
+/// True for OS-level media/volume keys. SMTC (Windows), MPRIS
+/// (Linux) and the macOS Now Playing bridge own these — the in-app dispatcher must never swallow them,
 /// or a focused press would fire through both the OS path and this one.
 bool isSystemMediaKey(LogicalKeyboardKey k) =>
     k == LogicalKeyboardKey.mediaPlayPause ||
